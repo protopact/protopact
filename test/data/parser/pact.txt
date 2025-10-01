@@ -1,0 +1,86 @@
+==simple pact
+pact a.b.c
+
+
+--
+pact:
+  content: "a.b.c"
+  range: "1:6[5-10]"
+  segments:
+    - content: "a"
+      position: "1:6"
+    - content: "b"
+      position: "1:8"
+    - content: "c"
+      position: "1:10"
+
+
+==longer pact
+pact meshapi.gateway.v1
+
+
+--
+pact:
+  content: "meshapi.gateway.v1"
+  range: "1:6[5-23]"
+  segments:
+    - content: "meshapi"
+      position: "1:6"
+    - content: "gateway"
+      position: "1:14"
+    - content: "v1"
+      position: "1:22"
+
+
+==single pact
+pact meshapi
+
+
+--
+pact:
+  content: "meshapi"
+  range: "1:6[5-12]"
+  segments:
+    - content: "meshapi"
+      position: "1:6"
+
+
+==invalid extra dot
+pact meshapi.gateway.v1.
+
+
+--
+1:24[23-24] unexpected token @literal=.
+
+
+==extra identifier
+pact meshapi.gateway.v1 additional
+
+
+--
+1:25[24-34] unexpected token @literal=additional
+
+
+==too many dots
+pact meshapi.gateway..
+
+
+--
+1:22[21-22] unexpected token @literal=.
+
+
+==no pact
+pact
+
+
+--
+0:0[0] unexpected end of file @literal=
+
+
+==duplicated pact
+pact a.b.c
+pact meshapi.gateway
+
+
+--
+2:6[16-31] duplicated pact statement, each document can have a single pact statement @literal=meshapi.gateway

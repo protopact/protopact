@@ -1,0 +1,86 @@
+==single quote
+import 'some/package'
+
+
+--
+imports:
+  - alias: ""
+    implicit: false
+    path: "some/package"
+    range: "1:8[7-21]"
+
+
+==double quote
+import "some/package"
+
+
+--
+imports:
+  - alias: ""
+    implicit: false
+    path: "some/package"
+    range: "1:8[7-21]"
+
+
+==wildcard
+import _ "some/package"
+
+
+--
+imports:
+  - alias: ""
+    implicit: true
+    path: "some/package"
+    range: "1:8[7-23]"
+
+
+==wildcard
+import name "some/package"
+
+
+--
+imports:
+  - alias: "name"
+    implicit: false
+    path: "some/package"
+    range: "1:8[7-26]"
+
+
+==import group / all flavors
+import (
+  _ "wildcard"
+  alias "some/package"
+	"regular"
+)
+
+
+--
+imports:
+  - alias: ""
+    implicit: true
+    path: "wildcard"
+    range: "2:3[11-23]"
+  - alias: "alias"
+    implicit: false
+    path: "some/package"
+    range: "3:3[26-46]"
+  - alias: ""
+    implicit: false
+    path: "regular"
+    range: "4:2[48-57]"
+
+
+==import number (error)
+import 1.23
+
+
+--
+1:8[7] expected path string @literal=1.23
+
+
+==import with alias and no package (error)
+import alias
+
+
+--
+0:0[0] unexpected end of file @literal=

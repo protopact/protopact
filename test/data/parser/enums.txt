@@ -1,0 +1,309 @@
+==one liner
+enum Color { Red, Green, Blue }
+
+
+--
+options:
+enums:
+  - name: "Color"
+    range: "1:6[5-31]"
+    options:
+    variants:
+      - name: "Red"
+        range: "1:14[13-16]"
+        value: null
+        options:
+      - name: "Green"
+        range: "1:19[18-23]"
+        value: null
+        options:
+      - name: "Blue"
+        range: "1:26[25-29]"
+        value: null
+        options:
+
+
+==value assignment and variant options
+enum Color { Red = 1, Green #required, Blue = 51 s#ignore r#"meshapi.io:name" = "b" }
+
+
+--
+options:
+enums:
+  - name: "Color"
+    range: "1:6[5-85]"
+    options:
+    variants:
+      - name: "Red"
+        range: "1:14[13-20]"
+        value: 1
+        options:
+      - name: "Green"
+        range: "1:23[22-37]"
+        value: null
+        options:
+          - raw: false
+            shared: false
+            range: "1:30[29-37]"
+            selector:
+              content: "required"
+              range: "1:30[29-37]"
+            value:
+              range: "1:30[29-37]"
+              data: true
+      - name: "Blue"
+        range: "1:40[39-83]"
+        value: 51
+        options:
+          - raw: false
+            shared: true
+            range: "1:52[51-57]"
+            selector:
+              content: "ignore"
+              range: "1:52[51-57]"
+            value:
+              range: "1:52[51-57]"
+              data: true
+          - raw: true
+            shared: true
+            range: "1:61[60-83]"
+            selector:
+              content: "meshapi.io:name"
+              range: "1:61[60-77]"
+            value:
+              range: "1:81[80-83]"
+              data: "b"
+
+
+==enum options
+enum Color {
+  s#openapi {
+		description = "Represents an RGB color."
+	}
+
+	#cpp {
+		prefix = "COLOR"
+	}
+
+	Unknown = 0 #ignore,
+	Red,
+	Blue,
+	Green,
+}
+
+
+--
+options:
+enums:
+  - name: "Color"
+    range: "1:6[5-149]"
+    options:
+      - raw: false
+        shared: true
+        range: "2:5[17-72]"
+        selector:
+          content: "openapi"
+          range: "2:5[17-24]"
+        block:
+          - raw: false
+            shared: false
+            range: "3:3[29-69]"
+            selector:
+              content: "description"
+              range: "3:3[29-40]"
+            value:
+              range: "3:17[43-69]"
+              data: "Represents an RGB color."
+      - raw: false
+        shared: false
+        range: "6:3[76-103]"
+        selector:
+          content: "cpp"
+          range: "6:3[76-79]"
+        block:
+          - raw: false
+            shared: false
+            range: "7:3[84-100]"
+            selector:
+              content: "prefix"
+              range: "7:3[84-90]"
+            value:
+              range: "7:12[93-100]"
+              data: "COLOR"
+    variants:
+      - name: "Unknown"
+        range: "10:2[106-125]"
+        value: 0
+        options:
+          - raw: false
+            shared: false
+            range: "10:15[119-125]"
+            selector:
+              content: "ignore"
+              range: "10:15[119-125]"
+            value:
+              range: "10:15[119-125]"
+              data: true
+      - name: "Red"
+        range: "11:2[128-131]"
+        value: null
+        options:
+      - name: "Blue"
+        range: "12:2[134-138]"
+        value: null
+        options:
+      - name: "Green"
+        range: "13:2[141-146]"
+        value: null
+        options:
+
+
+==enum group
+enum ()
+enum (
+	Color { Red, Green, Blue }
+	Mood {
+		Unsure = 0,
+		Happy,
+		Sad,
+		Excited,
+	}
+)
+
+
+--
+options:
+enums:
+  - name: "Color"
+    range: "3:2[16-42]"
+    options:
+    variants:
+      - name: "Red"
+        range: "3:10[24-27]"
+        value: null
+        options:
+      - name: "Green"
+        range: "3:15[29-34]"
+        value: null
+        options:
+      - name: "Blue"
+        range: "3:22[36-40]"
+        value: null
+        options:
+  - name: "Mood"
+    range: "4:2[44-94]"
+    options:
+    variants:
+      - name: "Unsure"
+        range: "5:3[53-63]"
+        value: 0
+        options:
+      - name: "Happy"
+        range: "6:3[67-72]"
+        value: null
+        options:
+      - name: "Sad"
+        range: "7:3[76-79]"
+        value: null
+        options:
+      - name: "Excited"
+        range: "8:3[83-90]"
+        value: null
+        options:
+
+
+==block options
+enum Color {
+	WithComma {
+		s#shared_option = 1
+		regular_option = false
+	},
+	WithoutComma = 2 {
+		r#"meshapi:meta" = "something"
+	}
+	LastVariant = 3
+}
+
+
+--
+options:
+enums:
+  - name: "Color"
+    range: "1:6[5-151]"
+    options:
+    variants:
+      - name: "WithComma"
+        range: "2:2[14-75]"
+        value: null
+        options:
+          - raw: false
+            shared: true
+            range: "3:5[30-47]"
+            selector:
+              content: "shared_option"
+              range: "3:5[30-43]"
+            value:
+              range: "3:21[46-47]"
+              data: 1
+          - raw: false
+            shared: false
+            range: "4:3[50-72]"
+            selector:
+              content: "regular_option"
+              range: "4:3[50-64]"
+            value:
+              range: "4:20[67-72]"
+              data: false
+      - name: "WithoutComma"
+        range: "6:2[78-132]"
+        value: 2
+        options:
+          - raw: true
+            shared: true
+            range: "7:5[101-129]"
+            selector:
+              content: "meshapi:meta"
+              range: "7:5[101-115]"
+            value:
+              range: "7:22[118-129]"
+              data: "something"
+      - name: "LastVariant"
+        range: "9:2[134-149]"
+        value: 3
+        options:
+
+
+==invalid tag
+enum Color {
+	Red = -1 #ignore,
+	Blue = 9999999999999999
+}
+
+
+--
+options:
+enums:
+  - name: "Color"
+    range: "1:6[5-58]"
+    options:
+    variants:
+      - name: "Red"
+        range: "2:2[14-30]"
+        value: null
+        options:
+          - raw: false
+            shared: false
+            range: "2:12[24-30]"
+            selector:
+              content: "ignore"
+              range: "2:12[24-30]"
+            value:
+              range: "2:12[24-30]"
+              data: true
+      - name: "Blue"
+        range: "3:2[33-56]"
+        value: null
+        options:
+
+2:8[20-22] enum value must be a positive integer from 0 to 2^32-1 @literal=-1
+3:9[40-56] enum value must be a positive integer from 0 to 2^32-1 @literal=9999999999999999
