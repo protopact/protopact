@@ -160,6 +160,46 @@ pub const SyntaxError = struct {
     }
 };
 
+/// A result type that can be used to communicated partial data with need for recovery, complete data without any need
+/// for recovery or no data with only an error.
+fn ParseResult(T: type, E: type) type {
+    return union(enum) {
+        /// data is parsed without any issues.
+        ok: T,
+        /// some partial data is parsed but a syntax error is encountered, the error is not recovered after an attempt
+        /// and the current scope is exited so the processing of the current scope must end immediately without
+        /// attempting to recover.
+        scopeExited: T,
+        /// an error, either syntactic or otherwise is encountered and there is no partial data.
+        /// A recovery attempt is likely necessary.
+        err: E,
+
+        const Self = @This();
+
+        fn initOk(value: T) Self {
+            return .{ .ok = value };
+        }
+
+        fn tryInitOk(u: E!T) Self {
+            return if (u) |value| .{ .ok = value } else |err| .{ .err = err };
+        }
+
+        fn initScopeExited(value: T) Self {
+            return .{ .scopeExited = value };
+        }
+
+        /// takes an error union, if the value is available, creates a scopeExited result, otherwise the error.
+        /// it is helpful when trying to produce the final value in a fallible operation.
+        fn tryInitScopeExited(u: E!T) Self {
+            return if (u) |value| .{ .scopeExited = value } else |err| .{ .err = err };
+        }
+
+        fn initErr(err: E) Self {
+            return .{ .err = err };
+        }
+    };
+}
+
 /// PartialResult could potentially return partial result.
 /// If the result indicates some partial value is extracted but
 /// the parser needs recovery, the caller needs to recover correctly.
@@ -437,13 +477,15 @@ const Context = struct {
                     }
                 },
                 .Identifier => {
-                    if (self.parseEnumVariant()) |enumVariant| {
-                        try variants.append(enumVariant.data);
-                        if (enumVariant.needsRecovery) {
+                    switch (self.parseEnumVariant()) {
+                        .ok => |value| try variants.append(value),
+                        .scopeExited => |value| {
+                            try variants.append(value);
                             break;
-                        }
-                    } else |err| if (try self.recoverExitsScope(err, EnumBodyRecoveryPoints, true)) {
-                        break;
+                        },
+                        .err => |err| if (try self.recoverExitsScope(err, EnumBodyRecoveryPoints, true)) {
+                            break;
+                        },
                     }
                 },
                 .Documentation => try self.captureDocumentationGroup(),
@@ -493,9 +535,11 @@ const Context = struct {
         };
     }
 
-    fn parseEnumVariant(self: *Context) Error!PartialResult(ast.EnumVariant) {
-        const documentation = try self.consumeStagedDocumentationFor(self.it.currentAssumeSafe().position);
-        const nameToken = try self.consumeRequiredToken(.Identifier, "enum value");
+    fn parseEnumVariant(self: *Context) ParseResult(ast.EnumVariant, Error) {
+        const documentation = self.consumeStagedDocumentationFor(
+            self.it.currentAssumeSafe().position,
+        ) catch |err| return .initErr(err);
+        const nameToken = self.consumeRequiredToken(.Identifier, "enum value") catch |err| return .initErr(err);
         var value: ?u32 = null;
 
         if (self.consumeOptionalTokenBool(.Equal)) {
@@ -504,18 +548,24 @@ const Context = struct {
                 if (std.math.cast(u32, valueToken.kind.Integer)) |tag| {
                     value = tag;
                 } else self.addError(SyntaxError.enumVariantNumericalError(&valueToken));
-            } else |err| if (try self.recoverExitsScope(err, &.{ .RawHash, .Hash, .SharedHash, .Comma }, false)) {
-                return PartialResult(ast.EnumVariant).initRecovery(
-                    try self.buildEnumVariant(nameToken, null, documentation, &.{}),
-                );
+            } else |err| {
+                const scopeExited = self.recoverExitsScope(
+                    err,
+                    &.{ .RawHash, .Hash, .SharedHash, .Comma },
+                    false,
+                ) catch |e| return .initErr(e);
+                if (scopeExited) {
+                    return .tryInitScopeExited(
+                        self.buildEnumVariant(nameToken, null, documentation, &.{}),
+                    );
+                }
             }
         }
 
-        const options = try self.parseItemOptions();
-        return PartialResult(ast.EnumVariant){
-            .data = try self.buildEnumVariant(nameToken, value, documentation, options.data),
-            .needsRecovery = options.needsRecovery,
-        };
+        const options = self.parseItemOptions() catch |err| return .initErr(err);
+        return .tryInitOk(
+            self.buildEnumVariant(nameToken, value, documentation, options.data),
+        );
     }
 
     fn processMessage(self: *Context) Error!void {
