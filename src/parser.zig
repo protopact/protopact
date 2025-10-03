@@ -187,18 +187,6 @@ fn ParseResult(T: type) type {
             return .{ .syntaxErr = {} };
         }
 
-        // TODO: clean up all function that are not used.
-        fn exitedScope(self: Self) bool {
-            return self == .some and self.some.scopeExited;
-        }
-
-        fn unwrapOrElse(self: Self, comptime default: T) T {
-            return switch (self) {
-                .some => |v| v,
-                .syntaxErr => default,
-            };
-        }
-
         fn unwrap(self: Self) Error!T {
             return switch (self) {
                 .some => |v| v.data,
@@ -214,33 +202,6 @@ fn ParseResult(T: type) type {
             return switch (err) {
                 Error.UnexpectedToken => .initSyntaxErr(),
                 else => |e| e,
-            };
-        }
-    };
-}
-
-/// PartialResult could potentially return partial result.
-/// If the result indicates some partial value is extracted but
-/// the parser needs recovery, the caller needs to recover correctly.
-fn PartialResult(valueType: type) type {
-    return struct {
-        /// The parsed value which may be partial if a potentially recoverable error
-        /// is encountered.
-        data: valueType,
-        /// Indicates if recovery is needed.
-        needsRecovery: bool,
-
-        fn ok(data: valueType) @This() {
-            return .{
-                .data = data,
-                .needsRecovery = false,
-            };
-        }
-
-        fn initRecovery(data: valueType) @This() {
-            return .{
-                .data = data,
-                .needsRecovery = true,
             };
         }
     };
