@@ -167,43 +167,47 @@ pub const SyntaxError = struct {
 /// for recovery or no data with only an error.
 fn ParseResult(T: type) type {
     return union(enum) {
-        /// data is parsed without any issues.
-        ok: T,
-        /// some partial data is parsed but a syntax error is encountered, the error is not recovered after an attempt
-        /// and the current scope is exited so the processing of the current scope must end immediately without
-        /// attempting to recover.
-        scopeExited: T,
-        /// an error, either syntactic or otherwise is encountered and there is no partial data.
-        /// A recovery attempt is likely necessary.
+        /// regardless of any syntax error, some data is parsed and if as part of any recovery process, the current
+        /// scope is exited, the caller need to cease processing their scope immediately without consuming any tokens.
+        some: struct { data: T, scopeExited: bool },
+        /// a syntax error is encountered and no data could be parsed as a result of it.
         syntaxErr: void,
 
         const Self = @This();
 
         fn initOk(value: T) Self {
-            return .{ .ok = value };
+            return .{ .some = .{ .data = value, .scopeExited = false } };
         }
 
         fn initScopeExited(value: T) Self {
-            return .{ .scopeExited = value };
+            return .{ .some = .{ .data = value, .scopeExited = true } };
         }
 
         fn initSyntaxErr() Self {
             return .{ .syntaxErr = {} };
         }
 
+        // TODO: clean up all function that are not used.
         fn exitedScope(self: Self) bool {
-            return self == .scopeExited;
+            return self == .some and self.some.scopeExited;
         }
 
-        fn unwrapValue(self: Self, comptime default: T) T {
+        fn unwrapOrElse(self: Self, comptime default: T) T {
             return switch (self) {
-                .scopeExited, .ok => |v| v,
+                .some => |v| v,
                 .syntaxErr => default,
             };
         }
 
-        fn initValue(value: T, needsRecovery: bool) Self {
-            return if (needsRecovery) .initOk(value) else .initScopeExited(value);
+        fn unwrap(self: Self) Error!T {
+            return switch (self) {
+                .some => |v| v.data,
+                .syntaxErr => Error.UnexpectedToken,
+            };
+        }
+
+        fn initValue(value: T, scopeExited: bool) Self {
+            return .{ .some = .{ .data = value, .scopeExited = scopeExited } };
         }
 
         fn initErr(err: Error) FatalError!Self {
@@ -273,7 +277,7 @@ const Context = struct {
     interfaces: std.ArrayList(ast.Interface),
     documentation: ?ast.Documentation,
 
-    const EntryKeywords = &[_]TokenKindTag{
+    const EntryKeywords: []const TokenKindTag = &.{
         .Pact,
         .Import,
         .RawHash,
@@ -287,13 +291,21 @@ const Context = struct {
         .Documentation,
     };
 
-    const ScopeDelimiterTokens = &[_]TokenKindTag{
+    const ScopeDelimiterTokens: []const TokenKindTag = &.{
         .LeftCurlyBrace,
         .LeftBracket,
         .LeftParan,
         .RightCurlyBrace,
         .RightBracket,
         .RightParan,
+    };
+
+    const EnumBodyRecoveryPoints: []const TokenKindTag = &.{
+        .Hash,
+        .RawHash,
+        .SharedHash,
+        .Identifier,
+        .Documentation,
     };
 
     fn init(allocator: Allocator, tokens: []const scanner.Token) Context {
@@ -406,7 +418,7 @@ const Context = struct {
         documentation: ?ast.Documentation,
         start: ast.Position,
         options: []ast.OptionAssignmentNode,
-    ) Error!void {
+    ) Allocator.Error!void {
         try self.constants.append(ast.Constant{
             .name = try self.copyString(name),
             .value = value,
@@ -426,28 +438,38 @@ const Context = struct {
         _ = self.consumeRequiredToken(.Equal, "=") catch |err| {
             return self.recover(err, ConstRecoveryPoints, false);
         };
-        const value = self.parseValue() catch |err| {
-            return self.recover(err, ConstRecoveryPoints, false);
+
+        const value = switch (try self.parseValue()) {
+            .some => |v| blk: {
+                if (v.scopeExited) {
+                    try self.addConst(nameToken.literal, v.data, documentation, start, &.{});
+                    return;
+                }
+                break :blk v.data;
+            },
+            // TODO: we might need a different version of self.recover, something like recoverSyntaxError
+            // and maybe the recoverSyntaxError should gaurantee FatalError.
+            .syntaxErr => return self.recover(error.UnexpectedToken, ConstRecoveryPoints, false),
         };
 
-        if (value.needsRecovery) {
-            try self.addConst(nameToken.literal, value.data, documentation, start, &[_]ast.OptionAssignmentNode{});
-            return;
-        }
-
         const options: []ast.OptionAssignmentNode = if (self.nextTokenIs(.LeftCurlyBrace)) blk: {
-            const optionBlock = self.parseOptionBlock() catch |err| {
-                try self.addConst(nameToken.literal, value.data, documentation, start, &[_]ast.OptionAssignmentNode{});
-                return self.recover(err, ConstRecoveryPoints, false);
-            };
-            if (optionBlock.needsRecovery) {
-                try self.addConst(nameToken.literal, value.data, documentation, start, optionBlock.data);
-                return Error.UnexpectedToken;
+            switch (try self.parseOptionBlock()) {
+                .some => |v| {
+                    if (v.scopeExited) {
+                        try self.addConst(nameToken.literal, value, documentation, start, v.data);
+                        return Error.UnexpectedToken;
+                    }
+                    break :blk v.data;
+                },
+                .syntaxErr => {
+                    // TODO: same as above.
+                    try self.addConst(nameToken.literal, value, documentation, start, &.{});
+                    return self.recover(error.UnexpectedToken, ConstRecoveryPoints, false);
+                },
             }
-            break :blk optionBlock.data;
-        } else &[_]ast.OptionAssignmentNode{};
+        } else &.{};
 
-        try self.addConst(nameToken.literal, value.data, documentation, start, options);
+        try self.addConst(nameToken.literal, value, documentation, start, options);
     }
 
     fn processEnum(self: *Context) Error!void {
@@ -456,13 +478,6 @@ const Context = struct {
 
     fn processEnumBody(self: *Context) Error!void {
         const EnumEntryRecoveryPoints: []const TokenKindTag = &.{ .Documentation, .Identifier };
-        const EnumBodyRecoveryPoints: []const TokenKindTag = &.{
-            .Hash,
-            .RawHash,
-            .SharedHash,
-            .Identifier,
-            .Documentation,
-        };
         const documentation = try self.parseDocumentationGroupForCurrentPosition();
         const nameToken = self.consumeRequiredToken(.Identifier, "enum name") catch |err| {
             return self.recover(err, EnumEntryRecoveryPoints, false);
@@ -481,25 +496,21 @@ const Context = struct {
             switch (token.kind) {
                 .Comment => self.consume(),
                 .Hash, .RawHash, .SharedHash => {
-                    if (self.parseOption(false, null)) |option| {
-                        try options.append(option.data);
-                        if (option.needsRecovery) {
-                            break;
-                        }
-                    } else |err| if (try self.recoverExitsScope(err, EnumBodyRecoveryPoints, true)) {
-                        break;
+                    switch (try self.parseOption(false, null)) {
+                        .some => |v| {
+                            try options.append(v.data);
+                            if (v.scopeExited) break;
+                        },
+                        .syntaxErr => if (try self.recoverSyntaxError(EnumBodyRecoveryPoints, true)) break,
                     }
                 },
                 .Identifier => {
                     switch (try self.parseEnumVariant()) {
-                        .ok => |value| try variants.append(value),
-                        .scopeExited => |value| {
-                            try variants.append(value);
-                            break;
+                        .some => |value| {
+                            try variants.append(value.data);
+                            if (value.scopeExited) break;
                         },
-                        .syntaxErr => if (try self.recoverSyntaxError(EnumBodyRecoveryPoints, true)) {
-                            break;
-                        },
+                        .syntaxErr => if (try self.recoverSyntaxError(EnumBodyRecoveryPoints, true)) break,
                     }
                 },
                 .Documentation => try self.captureDocumentationGroup(),
@@ -567,11 +578,16 @@ const Context = struct {
             }
         }
 
-        // TODO: need to support recovery here.
-        const options = try self.parseItemOptions();
-        return .initOk(
-            try self.buildEnumVariant(nameToken, value, documentation, options.data),
-        );
+        return switch (try self.parseItemOptions()) {
+            .some => |v| .initValue(
+                try self.buildEnumVariant(nameToken, value, documentation, v.data),
+                v.scopeExited,
+            ),
+            .syntaxErr => .initValue(
+                try self.buildEnumVariant(nameToken, value, documentation, &.{}),
+                try self.recoverSyntaxError(EnumBodyRecoveryPoints, true),
+            ),
+        };
     }
 
     fn processMessage(self: *Context) Error!void {
@@ -611,13 +627,14 @@ const Context = struct {
                 .Comment => self.consume(),
                 .Documentation => try self.captureDocumentationGroup(),
                 .Hash, .RawHash, .SharedHash => {
-                    if (self.parseOption(false, null)) |option| {
-                        try options.append(option.data);
-                        if (option.needsRecovery) {
-                            break;
-                        }
-                    } else |err| if (try self.recoverExitsScope(err, MessageBodyRecoveryPoints, true)) {
-                        break;
+                    switch (try self.parseOption(false, null)) {
+                        .some => |v| {
+                            try options.append(v.data);
+                            if (v.scopeExited) {
+                                break;
+                            }
+                        },
+                        .syntaxErr => if (try self.recoverSyntaxError(MessageBodyRecoveryPoints, true)) break,
                     }
                 },
                 .Identifier => try fields.append(try self.parseField(null)),
@@ -694,7 +711,7 @@ const Context = struct {
                 .range = nameToken.range(),
             },
             .documentation = documentation,
-            .options = options.data,
+            .options = try options.unwrap(),
             .range = ast.Range{
                 .start = nameToken.position,
                 .endOffset = self.it.currentAssumeSafe().endOffset(),
@@ -779,7 +796,7 @@ const Context = struct {
             };
             switch (nextToken.kind) {
                 .Identifier => try fields.append(try self.parseField(oneOfGroupIndex)),
-                .Hash, .RawHash, .SharedHash => try options.append((try self.parseOption(false, null)).data),
+                .Hash, .RawHash, .SharedHash => try options.append(try (try self.parseOption(false, null)).unwrap()),
                 .RightCurlyBrace => {
                     self.consume();
                     break;
@@ -806,27 +823,28 @@ const Context = struct {
         }
 
         var values = std.ArrayList(ast.OptionAssignmentNode).init(self.allocator);
-        const needsRecovery = blk: {
+        const scopeExited = blk: {
             mainLoop: while (true) {
                 const token = self.it.peek(1) orelse break :blk false;
                 if (token.kind == .RightCurlyBrace or token.kind == .Comma) {
                     break :blk false;
                 }
-                const option = try self.parseOption(false, null);
-                switch (option) {
-                    .ok, .scopeExited => |v| try values.append(v),
+                switch (try self.parseOption(false, null)) {
+                    .some => |v| {
+                        try values.append(v.data);
+                        if (v.scopeExited) {
+                            break :blk true;
+                        }
+                    },
                     .syntaxErr => if (try self.recoverSyntaxError(RecoveryPoints, true))
                         break :blk true
                     else
                         continue :mainLoop,
                 }
-                if (option.exitedScope()) {
-                    break :blk true;
-                }
             }
         };
 
-        return .initValue(values.items, needsRecovery);
+        return .initValue(values.items, scopeExited);
     }
 
     fn processOptionDefinition(self: *Context) Error!void {
@@ -918,7 +936,7 @@ const Context = struct {
             switch (nextToken.kind) {
                 .Comment => self.consume(),
                 .Hash, .SharedHash, .RawHash => {
-                    try options.append((try self.parseOption(false, null)).data);
+                    try options.append(try (try self.parseOption(false, null)).unwrap());
                     _ = self.consumeOptionalTokenBool(.Comma);
                 },
                 .Documentation => try self.captureDocumentationGroup(),
@@ -989,7 +1007,8 @@ const Context = struct {
         var options: []ast.OptionAssignmentNode = undefined;
         if (self.nextTokenIs(.LeftCurlyBrace)) {
             // 1. Either a block with an optional semicolon.
-            options = (try self.parseOptionBlock()).data;
+            const optionBlock = try self.parseOptionBlock();
+            options = try optionBlock.unwrap();
             _ = self.consumeOptionalTokenBool(.Semicolon);
         } else {
             // 2. or a series of option statement followed by a semicolon.
@@ -1003,7 +1022,7 @@ const Context = struct {
                     self.consume();
                     break;
                 }
-                try list.append((try self.parseOption(false, null)).data);
+                try list.append(try (try self.parseOption(false, null)).unwrap());
             }
             options = list.items;
         }
@@ -1083,11 +1102,12 @@ const Context = struct {
                 .raw = modifiers.raw,
                 .selector = ast.Selector.init(&[_]u8{}, ast.Range.empty()),
                 .range = ast.Range{ .start = start, .endOffset = self.it.currentAssumeSafe().endOffset() },
-                .value = .{ .Group = blockOptions.data },
+                .value = .{ .Group = try blockOptions.unwrap() },
             };
             try self.options.append(rootOption);
         } else {
-            try self.options.append((try self.parseOption(false, modifiers)).data);
+            const option = try self.parseOption(false, modifiers);
+            try self.options.append(try option.unwrap());
         }
     }
 
@@ -1156,36 +1176,34 @@ const Context = struct {
         if (self.it.peek(1)) |valueToken| switch (valueToken.kind) {
             .LeftCurlyBrace => {
                 const currentScope = self.scopeDelimiterContext();
-                const optionBlock = try self.parseOptionBlock();
-                return switch (optionBlock) {
-                    .ok, .scopeExited => |v| .initValue(.{
+                return switch (try self.parseOptionBlock()) {
+                    .some => |v| .initValue(.{
                         .shared = modifiers.shared,
                         .raw = modifiers.raw,
                         .selector = selector,
-                        .value = .{ .Group = v },
+                        .value = .{ .Group = v.data },
                         .range = .{
                             .start = start,
                             .endOffset = self.it.currentAssumeSafe().endOffset(),
                         },
-                    }, optionBlock.exitedScope() and (self.scopeDelimiterContext() + 1 != currentScope)),
+                    }, v.scopeExited and (self.scopeDelimiterContext() + 1 != currentScope)),
                     .syntaxErr => .initSyntaxErr(),
                 };
             },
             .Equal => {
                 self.consume();
                 const currentScope = self.scopeDelimiterContext();
-                const optionValue = try self.parseValue();
-                return switch (optionValue) {
-                    .ok, .scopeExited => |v| .initValue(.{
+                return switch (try self.parseValue()) {
+                    .some => |v| .initValue(.{
                         .shared = modifiers.shared,
                         .raw = modifiers.raw,
                         .selector = selector,
-                        .value = .{ .Leaf = v },
+                        .value = .{ .Leaf = v.data },
                         .range = .{
                             .start = start,
-                            .endOffset = v.range.endOffset,
+                            .endOffset = v.data.range.endOffset,
                         },
-                    }, optionValue.exitedScope() and (self.scopeDelimiterContext() + 1 != currentScope)),
+                    }, v.scopeExited and (self.scopeDelimiterContext() + 1 != currentScope)),
                     .syntaxErr => .initSyntaxErr(),
                 };
             },
@@ -1208,7 +1226,7 @@ const Context = struct {
     }
 
     fn parseOptionBlock(self: *Context) FatalError!ParseResult([]ast.OptionAssignmentNode) {
-        const OptionBlockRecoveryPoints = &[_]TokenKindTag{
+        const OptionBlockRecoveryPoints: []const TokenKindTag = &.{
             .Comma,
             .Identifier,
             .String,
@@ -1217,41 +1235,36 @@ const Context = struct {
             .SharedHash,
         };
         var values = std.ArrayList(ast.OptionAssignmentNode).init(self.allocator);
-        _ = try self.consumeRequiredToken(.LeftCurlyBrace, "{");
+        _ = self.consumeRequiredToken(.LeftCurlyBrace, "{") catch |err| return .initErr(err);
         const currentScope = self.scopeDelimiterContext();
         const needsRecovery = blk: {
-            mainLoop: while (true) {
+            while (true) {
                 const token = self.it.peek(1) orelse {
                     self.addError(SyntaxError.unexpectedEOF());
-                    return Error.UnexpectedToken;
+                    return .initSyntaxErr();
                 };
                 if (token.kind == .RightCurlyBrace) {
                     self.consume();
                     self.popScopeDelimiter(.CurlyBrace);
                     break :blk false;
                 }
-                const value = self.parseOption(true, null) catch |err| {
-                    // TODO: Problem is that we don't consume something that was unexpected. we either need to consume it
-                    // or decide sometimes to go backwards at all. We should examine this to avoid for-loops in other
-                    // places and possibly put a for-loop gaurd.
-                    if (try self.recoverExitsScope(err, OptionBlockRecoveryPoints, true)) {
+                switch (try self.parseOption(true, null)) {
+                    .some => |v| {
+                        try values.append(v.data);
+                        if (v.scopeExited) {
+                            break :blk true;
+                        }
+                    },
+                    .syntaxErr => if (try self.recoverSyntaxError(OptionBlockRecoveryPoints, true)) {
                         break :blk true;
-                    }
-                    _ = self.consumeOptionalTokenBool(.Comma);
-                    continue :mainLoop;
-                };
-                try values.append(value.data);
-                if (value.needsRecovery) {
-                    break :blk true;
+                    },
                 }
+
                 _ = self.consumeOptionalTokenBool(.Comma);
             }
         };
 
-        return .{
-            .data = values.items,
-            .needsRecovery = needsRecovery and (self.scopeDelimiterContext() + 1 != currentScope),
-        };
+        return .initValue(values.items, needsRecovery and (self.scopeDelimiterContext() + 1 != currentScope));
     }
 
     /// parses an array of ranged values.
@@ -1275,7 +1288,7 @@ const Context = struct {
         const currentScope = self.scopeDelimiterContext();
 
         const needsRecovery = blk: {
-            mainLoop: while (true) {
+            while (true) {
                 const next = self.it.peek(1) orelse {
                     self.addError(SyntaxError.unexpectedEOF());
                     // TODO: would it not be better to just return UnexpectedEOF?
@@ -1288,20 +1301,18 @@ const Context = struct {
                     end = next.endOffset();
                     break :blk false;
                 }
-                const itemValue = try self.parseValue();
-                switch (itemValue) {
-                    .ok, .scopeExited => |v| try values.append(v),
+                switch (try self.parseValue()) {
+                    .some => |v| {
+                        try values.append(v.data);
+                        if (v.scopeExited) {
+                            end = self.it.currentAssumeSafe().endOffset();
+                            break :blk true;
+                        }
+                    },
                     .syntaxErr => if (try self.recoverSyntaxError(ArrayRecoveryPoints, false)) {
                         end = self.it.currentAssumeSafe().endOffset();
                         break :blk true;
-                    } else {
-                        _ = self.consumeOptionalTokenBool(.Comma);
-                        continue :mainLoop;
                     },
-                }
-                if (itemValue.exitedScope()) {
-                    end = self.it.currentAssumeSafe().endOffset();
-                    break :blk true;
                 }
                 _ = self.consumeOptionalTokenBool(.Comma);
             }
@@ -1328,7 +1339,7 @@ const Context = struct {
             mainLoop: while (true) {
                 const next = self.it.next() orelse {
                     self.addError(SyntaxError.unexpectedEOF());
-                    return Error.UnexpectedToken;
+                    return .initSyntaxErr();
                 };
                 switch (next.kind) {
                     .RightCurlyBrace => {
@@ -1344,23 +1355,21 @@ const Context = struct {
                             _ = self.consumeOptionalTokenBool(.Comma);
                             continue :mainLoop;
                         };
-                        const objectValue = try self.parseValue();
-                        switch (objectValue) {
-                            .ok, .scopeExited => |v| try values.append(.{
-                                .key = try self.copyString(next.kind.String),
-                                .value = v,
-                            }),
+                        switch (try self.parseValue()) {
+                            .some => |v| {
+                                try values.append(.{
+                                    .key = try self.copyString(next.kind.String),
+                                    .value = v.data,
+                                });
+                                if (v.scopeExited) {
+                                    end = self.it.currentAssumeSafe().endOffset();
+                                    break :blk true;
+                                }
+                            },
                             .syntaxErr => if (try self.recoverSyntaxError(ObjectRecoveryPoints, false)) {
                                 end = self.it.currentAssumeSafe().endOffset();
                                 break :blk true;
-                            } else {
-                                _ = self.consumeOptionalTokenBool(.Comma);
-                                continue :mainLoop;
                             },
-                        }
-                        if (objectValue.exitedScope()) {
-                            end = self.it.currentAssumeSafe().endOffset();
-                            break :blk true;
                         }
                         _ = self.consumeOptionalTokenBool(.Comma);
                     },
@@ -1404,8 +1413,8 @@ const Context = struct {
                 .range = token.range(),
                 .value = .{ .Bool = false },
             }),
-            .LeftBracket => try self.parseValueArray(),
-            .LeftCurlyBrace => try self.parseValueObject(),
+            .LeftBracket => self.parseValueArray(),
+            .LeftCurlyBrace => self.parseValueObject(),
             else => {
                 self.addError(SyntaxError.expectToken(&token, "value"));
                 return .initSyntaxErr();
@@ -1818,24 +1827,24 @@ const Context = struct {
     /// This is helpful for nested structures such as parsing values, objects, options, etc.
     inline fn recoverExitsScope(
         self: *Context,
-        err: anytype,
+        err: Error,
         comptime tokens: []const TokenKindTag,
         comptime untilEndOfLine: bool,
-    ) !bool {
-        if (err != Error.UnexpectedToken) {
-            return err;
-        }
-
-        return self.recoverSyntaxError(tokens, untilEndOfLine);
+    ) FatalError!bool {
+        return switch (err) {
+            error.UnexpectedToken => self.recoverSyntaxError(tokens, untilEndOfLine),
+            else => |e| e,
+        };
     }
 
     /// similar to recover but returns whether or not the current scope is exited.
     /// This is helpful for nested structures such as parsing values, objects, options, etc.
+    // TODO: name is not great, we should rename this so it conveys the intent.
     inline fn recoverSyntaxError(
         self: *Context,
         comptime tokens: []const TokenKindTag,
         comptime untilEndOfLine: bool,
-    ) !bool {
+    ) error{NestingDepthReached}!bool {
         self.it.i -= 1; // revert the token consumption.
         // NB: Inside a scope, go until you find next entry token or falling outside of the
         // current scope.
