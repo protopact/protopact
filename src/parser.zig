@@ -4,6 +4,9 @@ const ast = @import("ast.zig");
 
 const Allocator = std.mem.Allocator;
 
+const Error = error{ UnexpectedToken, NestingDepthReached } || Allocator.Error;
+const FatalError = error{NestingDepthReached} || Allocator.Error;
+
 const OptionModifiers = struct {
     raw: bool,
     shared: bool,
@@ -162,7 +165,7 @@ pub const SyntaxError = struct {
 
 /// A result type that can be used to communicated partial data with need for recovery, complete data without any need
 /// for recovery or no data with only an error.
-fn ParseResult(T: type, E: type) type {
+fn ParseResult(T: type) type {
     return union(enum) {
         /// data is parsed without any issues.
         ok: T,
@@ -172,7 +175,7 @@ fn ParseResult(T: type, E: type) type {
         scopeExited: T,
         /// an error, either syntactic or otherwise is encountered and there is no partial data.
         /// A recovery attempt is likely necessary.
-        err: E,
+        syntaxErr: void,
 
         const Self = @This();
 
@@ -180,22 +183,34 @@ fn ParseResult(T: type, E: type) type {
             return .{ .ok = value };
         }
 
-        fn tryInitOk(u: E!T) Self {
-            return if (u) |value| .{ .ok = value } else |err| .{ .err = err };
-        }
-
         fn initScopeExited(value: T) Self {
             return .{ .scopeExited = value };
         }
 
-        /// takes an error union, if the value is available, creates a scopeExited result, otherwise the error.
-        /// it is helpful when trying to produce the final value in a fallible operation.
-        fn tryInitScopeExited(u: E!T) Self {
-            return if (u) |value| .{ .scopeExited = value } else |err| .{ .err = err };
+        fn initSyntaxErr() Self {
+            return .{ .syntaxErr = {} };
         }
 
-        fn initErr(err: E) Self {
-            return .{ .err = err };
+        fn exitedScope(self: Self) bool {
+            return self == .scopeExited;
+        }
+
+        fn unwrapValue(self: Self, comptime default: T) T {
+            return switch (self) {
+                .scopeExited, .ok => |v| v,
+                .syntaxErr => default,
+            };
+        }
+
+        fn initValue(value: T, needsRecovery: bool) Self {
+            return if (needsRecovery) .initOk(value) else .initScopeExited(value);
+        }
+
+        fn initErr(err: Error) FatalError!Self {
+            return switch (err) {
+                Error.UnexpectedToken => .initSyntaxErr(),
+                else => |e| e,
+            };
         }
     };
 }
@@ -240,7 +255,6 @@ const Context = struct {
     const ErrorList = std.BoundedArray(SyntaxError, 10);
     const ScopeDelimiterList = std.BoundedArray(ScopeDelimiter, 10);
 
-    const Error = error{ UnexpectedToken, NestingDepthReached } || Allocator.Error;
     const TokenKindTag = std.meta.Tag(scanner.TokenKind);
 
     allocator: Allocator,
@@ -477,13 +491,13 @@ const Context = struct {
                     }
                 },
                 .Identifier => {
-                    switch (self.parseEnumVariant()) {
+                    switch (try self.parseEnumVariant()) {
                         .ok => |value| try variants.append(value),
                         .scopeExited => |value| {
                             try variants.append(value);
                             break;
                         },
-                        .err => |err| if (try self.recoverExitsScope(err, EnumBodyRecoveryPoints, true)) {
+                        .syntaxErr => if (try self.recoverSyntaxError(EnumBodyRecoveryPoints, true)) {
                             break;
                         },
                     }
@@ -535,10 +549,8 @@ const Context = struct {
         };
     }
 
-    fn parseEnumVariant(self: *Context) ParseResult(ast.EnumVariant, Error) {
-        const documentation = self.consumeStagedDocumentationFor(
-            self.it.currentAssumeSafe().position,
-        ) catch |err| return .initErr(err);
+    fn parseEnumVariant(self: *Context) FatalError!ParseResult(ast.EnumVariant) {
+        const documentation = try self.consumeStagedDocumentationFor(self.it.currentAssumeSafe().position);
         const nameToken = self.consumeRequiredToken(.Identifier, "enum value") catch |err| return .initErr(err);
         var value: ?u32 = null;
 
@@ -548,23 +560,17 @@ const Context = struct {
                 if (std.math.cast(u32, valueToken.kind.Integer)) |tag| {
                     value = tag;
                 } else self.addError(SyntaxError.enumVariantNumericalError(&valueToken));
-            } else |err| {
-                const scopeExited = self.recoverExitsScope(
-                    err,
-                    &.{ .RawHash, .Hash, .SharedHash, .Comma },
-                    false,
-                ) catch |e| return .initErr(e);
-                if (scopeExited) {
-                    return .tryInitScopeExited(
-                        self.buildEnumVariant(nameToken, null, documentation, &.{}),
-                    );
-                }
+            } else |err| if (try self.recoverExitsScope(err, &.{ .RawHash, .Hash, .SharedHash, .Comma }, false)) {
+                return .initScopeExited(
+                    try self.buildEnumVariant(nameToken, null, documentation, &.{}),
+                );
             }
         }
 
-        const options = self.parseItemOptions() catch |err| return .initErr(err);
-        return .tryInitOk(
-            self.buildEnumVariant(nameToken, value, documentation, options.data),
+        // TODO: need to support recovery here.
+        const options = try self.parseItemOptions();
+        return .initOk(
+            try self.buildEnumVariant(nameToken, value, documentation, options.data),
         );
     }
 
@@ -792,7 +798,7 @@ const Context = struct {
         };
     }
 
-    fn parseItemOptions(self: *Context) Error!PartialResult([]ast.OptionAssignmentNode) {
+    fn parseItemOptions(self: *Context) FatalError!ParseResult([]ast.OptionAssignmentNode) {
         const RecoveryPoints: []const TokenKindTag = &.{ .Comma, .RawHash, .Hash, .SharedHash };
 
         if (self.nextTokenIs(.LeftCurlyBrace)) {
@@ -806,23 +812,21 @@ const Context = struct {
                 if (token.kind == .RightCurlyBrace or token.kind == .Comma) {
                     break :blk false;
                 }
-                const value = self.parseOption(false, null) catch |err| {
-                    if (try self.recoverExitsScope(err, RecoveryPoints, true)) {
-                        break :blk true;
-                    }
-                    continue :mainLoop;
-                };
-                try values.append(value.data);
-                if (value.needsRecovery) {
+                const option = try self.parseOption(false, null);
+                switch (option) {
+                    .ok, .scopeExited => |v| try values.append(v),
+                    .syntaxErr => if (try self.recoverSyntaxError(RecoveryPoints, true))
+                        break :blk true
+                    else
+                        continue :mainLoop,
+                }
+                if (option.exitedScope()) {
                     break :blk true;
                 }
             }
         };
 
-        return PartialResult([]ast.OptionAssignmentNode){
-            .data = values.items,
-            .needsRecovery = needsRecovery,
-        };
+        return .initValue(values.items, needsRecovery);
     }
 
     fn processOptionDefinition(self: *Context) Error!void {
@@ -1049,9 +1053,12 @@ const Context = struct {
                                 // outside of the paran scope; stop iterating.
                                 0 => break,
                                 // in the paran scope; skip the current line.
-                                1 => _ = try self.skipTokensUntil(&[_]TokenKindTag{}, true),
-                                // need to go back to the paran scope.
-                                else => _ = try self.skipTokensUntilScopeContext(1),
+                                1 => _ = try self.skipTokensUntil(&.{}, true),
+                                // unlikely event, get out of the paran scope.
+                                else => {
+                                    try self.skipTokensUntilRootScope();
+                                    break;
+                                },
                             }
                         },
                         else => return err,
@@ -1120,14 +1127,15 @@ const Context = struct {
         self: *Context,
         comptime blockMode: bool,
         capturedModifiers: ?OptionModifiers,
-    ) Error!PartialResult(ast.OptionAssignmentNode) {
-        const modifiers = capturedModifiers orelse try self.parseOptionModifiers(!blockMode);
+    ) FatalError!ParseResult(ast.OptionAssignmentNode) {
+        const modifiers = capturedModifiers orelse
+            self.parseOptionModifiers(!blockMode) catch |err| return .initErr(err);
         const start = self.currentPosition();
 
         // Parse the key.
         const keyToken = self.it.peek(1) orelse {
             self.addError(SyntaxError.unexpectedEOF());
-            return Error.UnexpectedToken;
+            return .initSyntaxErr();
         };
         const selector = switch (keyToken.kind) {
             .String => blk: {
@@ -1137,51 +1145,55 @@ const Context = struct {
                 self.consume();
                 break :blk ast.Selector.init(keyToken.kind.String, keyToken.range());
             },
-            .Identifier => try self.parseSelector(),
+            .Identifier => self.parseSelector() catch |err| return .initErr(err),
             else => {
                 self.addError(SyntaxError.expectToken(&keyToken, "option identifier or key"));
                 self.consume();
-                return Error.UnexpectedToken;
+                return .initSyntaxErr();
             },
         };
         // Parse the value, which can be a curly braces for blocks, a literal or nothing at all to indicate a flag.
         if (self.it.peek(1)) |valueToken| switch (valueToken.kind) {
             .LeftCurlyBrace => {
                 const currentScope = self.scopeDelimiterContext();
-                const values = try self.parseOptionBlock();
-                const range = ast.Range{ .start = start, .endOffset = self.it.currentAssumeSafe().endOffset() };
-                return PartialResult(ast.OptionAssignmentNode){
-                    .data = .{
+                const optionBlock = try self.parseOptionBlock();
+                return switch (optionBlock) {
+                    .ok, .scopeExited => |v| .initValue(.{
                         .shared = modifiers.shared,
                         .raw = modifiers.raw,
                         .selector = selector,
-                        .value = .{ .Group = values.data },
-                        .range = range,
-                    },
-                    .needsRecovery = values.needsRecovery and (self.scopeDelimiterContext() + 1 != currentScope),
+                        .value = .{ .Group = v },
+                        .range = .{
+                            .start = start,
+                            .endOffset = self.it.currentAssumeSafe().endOffset(),
+                        },
+                    }, optionBlock.exitedScope() and (self.scopeDelimiterContext() + 1 != currentScope)),
+                    .syntaxErr => .initSyntaxErr(),
                 };
             },
             .Equal => {
                 self.consume();
                 const currentScope = self.scopeDelimiterContext();
-                const rangedValue = try self.parseValue();
-                const range = ast.Range{ .start = start, .endOffset = rangedValue.data.range.endOffset };
-                return PartialResult(ast.OptionAssignmentNode){
-                    .data = .{
+                const optionValue = try self.parseValue();
+                return switch (optionValue) {
+                    .ok, .scopeExited => |v| .initValue(.{
                         .shared = modifiers.shared,
                         .raw = modifiers.raw,
                         .selector = selector,
-                        .value = .{ .Leaf = rangedValue.data },
-                        .range = range,
-                    },
-                    .needsRecovery = rangedValue.needsRecovery and (self.scopeDelimiterContext() + 1 != currentScope),
+                        .value = .{ .Leaf = v },
+                        .range = .{
+                            .start = start,
+                            .endOffset = v.range.endOffset,
+                        },
+                    }, optionValue.exitedScope() and (self.scopeDelimiterContext() + 1 != currentScope)),
+                    .syntaxErr => .initSyntaxErr(),
                 };
             },
             else => {},
         };
 
         const range = ast.Range{ .start = start, .endOffset = selector.range.endOffset };
-        return PartialResult(ast.OptionAssignmentNode).ok(.{
+        return .initOk(.{
             .shared = modifiers.shared,
             .raw = modifiers.raw,
             .selector = selector,
@@ -1195,7 +1207,7 @@ const Context = struct {
         });
     }
 
-    fn parseOptionBlock(self: *Context) Error!PartialResult([]ast.OptionAssignmentNode) {
+    fn parseOptionBlock(self: *Context) FatalError!ParseResult([]ast.OptionAssignmentNode) {
         const OptionBlockRecoveryPoints = &[_]TokenKindTag{
             .Comma,
             .Identifier,
@@ -1245,8 +1257,8 @@ const Context = struct {
     /// parses an array of ranged values.
     ///
     /// NOTE: It assumes the the left bracket is already consumed.
-    fn parseValueArray(self: *Context) Error!PartialResult(ast.RangedValue) {
-        const ArrayRecoveryPoints = &[_]TokenKindTag{
+    fn parseValueArray(self: *Context) FatalError!ParseResult(ast.RangedValue) {
+        const ArrayRecoveryPoints: []const TokenKindTag = &.{
             .String,
             .Integer,
             .Float,
@@ -1266,7 +1278,9 @@ const Context = struct {
             mainLoop: while (true) {
                 const next = self.it.peek(1) orelse {
                     self.addError(SyntaxError.unexpectedEOF());
-                    return Error.UnexpectedToken;
+                    // TODO: would it not be better to just return UnexpectedEOF?
+                    // and to provide a helper method try self.peekNextOrError()?
+                    return .initSyntaxErr();
                 };
                 if (next.kind == .RightBracket) {
                     self.popScopeDelimiter(.Bracket);
@@ -1274,16 +1288,18 @@ const Context = struct {
                     end = next.endOffset();
                     break :blk false;
                 }
-                const value = self.parseValue() catch |err| {
-                    if (try self.recoverExitsScope(err, ArrayRecoveryPoints, false)) {
+                const itemValue = try self.parseValue();
+                switch (itemValue) {
+                    .ok, .scopeExited => |v| try values.append(v),
+                    .syntaxErr => if (try self.recoverSyntaxError(ArrayRecoveryPoints, false)) {
                         end = self.it.currentAssumeSafe().endOffset();
                         break :blk true;
-                    }
-                    _ = self.consumeOptionalTokenBool(.Comma);
-                    continue :mainLoop;
-                };
-                try values.append(value.data);
-                if (value.needsRecovery) {
+                    } else {
+                        _ = self.consumeOptionalTokenBool(.Comma);
+                        continue :mainLoop;
+                    },
+                }
+                if (itemValue.exitedScope()) {
                     end = self.it.currentAssumeSafe().endOffset();
                     break :blk true;
                 }
@@ -1291,20 +1307,17 @@ const Context = struct {
             }
         };
 
-        return PartialResult(ast.RangedValue){
-            .data = .{
-                .value = .{ .Array = values.items },
-                .range = .{ .start = start, .endOffset = end },
-            },
-            .needsRecovery = needsRecovery and (self.scopeDelimiterContext() + 1 != currentScope),
-        };
+        return .initValue(.{
+            .value = .{ .Array = values.items },
+            .range = .{ .start = start, .endOffset = end },
+        }, needsRecovery and (self.scopeDelimiterContext() + 1 != currentScope));
     }
 
     /// parses a map of ranged values.
     ///
     /// NOTE: It assumes the the left curly brace is already consumed.
-    fn parseValueObject(self: *Context) Error!PartialResult(ast.RangedValue) {
-        const ObjectRecoveryPoints = &[_]TokenKindTag{ .String, .Comma };
+    fn parseValueObject(self: *Context) FatalError!ParseResult(ast.RangedValue) {
+        const ObjectRecoveryPoints: []const TokenKindTag = &.{ .String, .Comma };
         try self.pushScopeDelimiter(.CurlyBrace);
         var values = std.ArrayList(ast.Entry).init(self.allocator);
         const start = self.it.currentAssumeSafe().position;
@@ -1331,19 +1344,21 @@ const Context = struct {
                             _ = self.consumeOptionalTokenBool(.Comma);
                             continue :mainLoop;
                         };
-                        const value = self.parseValue() catch |err| {
-                            if (try self.recoverExitsScope(err, ObjectRecoveryPoints, false)) {
+                        const objectValue = try self.parseValue();
+                        switch (objectValue) {
+                            .ok, .scopeExited => |v| try values.append(.{
+                                .key = try self.copyString(next.kind.String),
+                                .value = v,
+                            }),
+                            .syntaxErr => if (try self.recoverSyntaxError(ObjectRecoveryPoints, false)) {
                                 end = self.it.currentAssumeSafe().endOffset();
                                 break :blk true;
-                            }
-                            _ = self.consumeOptionalTokenBool(.Comma);
-                            continue :mainLoop;
-                        };
-                        try values.append(.{
-                            .key = try self.copyString(next.kind.String),
-                            .value = value.data,
-                        });
-                        if (value.needsRecovery) {
+                            } else {
+                                _ = self.consumeOptionalTokenBool(.Comma);
+                                continue :mainLoop;
+                            },
+                        }
+                        if (objectValue.exitedScope()) {
                             end = self.it.currentAssumeSafe().endOffset();
                             break :blk true;
                         }
@@ -1351,44 +1366,41 @@ const Context = struct {
                     },
                     else => {
                         self.addError(SyntaxError.expectToken(&next, "key string literal"));
-                        return Error.UnexpectedToken;
+                        return .initSyntaxErr();
                     },
                 }
             }
         };
 
-        return PartialResult(ast.RangedValue){
-            .data = .{
-                .value = .{ .Object = values.items },
-                .range = .{ .start = start, .endOffset = end },
-            },
-            .needsRecovery = needsRecovery and (self.scopeDelimiterContext() + 1 != currentScope),
-        };
+        return .initValue(.{
+            .value = .{ .Object = values.items },
+            .range = .{ .start = start, .endOffset = end },
+        }, needsRecovery and (self.scopeDelimiterContext() + 1 != currentScope));
     }
 
-    fn parseValue(self: *Context) Error!PartialResult(ast.RangedValue) {
+    fn parseValue(self: *Context) FatalError!ParseResult(ast.RangedValue) {
         const token = self.it.next() orelse {
             self.addError(SyntaxError.unexpectedEOF());
-            return Error.UnexpectedToken;
+            return .initSyntaxErr();
         };
         return switch (token.kind) {
-            .String => PartialResult(ast.RangedValue).ok(.{
+            .String => .initOk(.{
                 .range = token.range(),
                 .value = .{ .String = try self.copyString(token.kind.String) },
             }),
-            .Integer => PartialResult(ast.RangedValue).ok(.{
+            .Integer => .initOk(.{
                 .range = token.range(),
                 .value = .{ .Number = token.kind.Integer },
             }),
-            .Float => PartialResult(ast.RangedValue).ok(.{
+            .Float => .initOk(.{
                 .range = token.range(),
                 .value = .{ .Float = token.kind.Float },
             }),
-            .True => PartialResult(ast.RangedValue).ok(.{
+            .True => .initOk(.{
                 .range = token.range(),
                 .value = .{ .Bool = true },
             }),
-            .False => PartialResult(ast.RangedValue).ok(.{
+            .False => .initOk(.{
                 .range = token.range(),
                 .value = .{ .Bool = false },
             }),
@@ -1396,7 +1408,7 @@ const Context = struct {
             .LeftCurlyBrace => try self.parseValueObject(),
             else => {
                 self.addError(SyntaxError.expectToken(&token, "value"));
-                return Error.UnexpectedToken;
+                return .initSyntaxErr();
             },
         };
     }
@@ -1814,12 +1826,23 @@ const Context = struct {
             return err;
         }
 
+        return self.recoverSyntaxError(tokens, untilEndOfLine);
+    }
+
+    /// similar to recover but returns whether or not the current scope is exited.
+    /// This is helpful for nested structures such as parsing values, objects, options, etc.
+    inline fn recoverSyntaxError(
+        self: *Context,
+        comptime tokens: []const TokenKindTag,
+        comptime untilEndOfLine: bool,
+    ) !bool {
         self.it.i -= 1; // revert the token consumption.
         // NB: Inside a scope, go until you find next entry token or falling outside of the
         // current scope.
-        if (self.scopeDelimiterContext() > 0) {
-            return self.skipTokensUntil(tokens, untilEndOfLine);
-        } else return self.skipTokensUntil(EntryKeywords, untilEndOfLine);
+        if (self.scopeDelimiterContext() > 0)
+            return self.skipTokensUntil(tokens, untilEndOfLine)
+        else
+            return self.skipTokensUntil(EntryKeywords, untilEndOfLine);
     }
 
     /// similar to handleScopeDelimiter but specifically for comptime and enter tokens.
@@ -1868,10 +1891,11 @@ const Context = struct {
         return self.scopeDelimiterContext() < scope;
     }
 
-    // TODO: Improve this function, it only needs to consume tokens until it gets to the right scope.
-    inline fn skipTokensUntilScopeContext(self: *Context, desiredContext: usize) Error!void {
-        while (self.scopeDelimiterContext() > desiredContext) {
-            _ = try self.skipTokensUntil(&[_]TokenKindTag{}, false);
+    inline fn skipTokensUntilRootScope(self: *Context) Error!void {
+        while (self.scopeDelimiterContext() > 0) {
+            if (try self.handleScopeDelimiterRecovery((self.it.next() orelse return).kind, 0)) {
+                return;
+            }
         }
     }
 };
