@@ -165,6 +165,14 @@ pub const SyntaxError = struct {
 
 /// A result type that can be used to communicated partial data with need for recovery, complete data without any need
 /// for recovery or no data with only an error.
+// TODO: Okay so ParseResult is really a simple struct with data and scopeExited.
+// All that the switch case is doing can be replaced with the following pattern:
+// if (self.parseSomething()) |value| {
+//   // append the value
+//   if (value.scopeExited()) {
+//      // break away
+//   }
+// } else |err| if (try self.recoverExitsScope(err, &.{}, true)) break;
 fn ParseResult(T: type) type {
     return union(enum) {
         /// regardless of any syntax error, some data is parsed and if as part of any recovery process, the current
@@ -267,6 +275,16 @@ const Context = struct {
         .SharedHash,
         .Identifier,
         .Documentation,
+    };
+
+    const MessageBodyRecoveryPoints: []const TokenKindTag = &.{
+        .Identifier,
+        .Embed,
+        .Documentation,
+        .Hash,
+        .RawHash,
+        .SharedHash,
+        .OneOf,
     };
 
     fn init(allocator: Allocator, tokens: []const scanner.Token) Context {
@@ -532,7 +550,7 @@ const Context = struct {
                 if (std.math.cast(u32, valueToken.kind.Integer)) |tag| {
                     value = tag;
                 } else self.addError(SyntaxError.enumVariantNumericalError(&valueToken));
-            } else |err| if (try self.recoverExitsScope(err, &.{ .RawHash, .Hash, .SharedHash, .Comma }, false)) {
+            } else |err| if (try self.recoverExitsScope(err, &.{ .RawHash, .Hash, .SharedHash, .Comma }, true)) {
                 return .initScopeExited(
                     try self.buildEnumVariant(nameToken, null, documentation, &.{}),
                 );
@@ -557,15 +575,6 @@ const Context = struct {
 
     fn processMessageBody(self: *Context) Error!void {
         const MessageEntryRecoveryPoints: []const TokenKindTag = &.{ .Documentation, .Identifier };
-        const MessageBodyRecoveryPoints: []const TokenKindTag = &.{
-            .Identifier,
-            .Embed,
-            .Documentation,
-            .Hash,
-            .RawHash,
-            .SharedHash,
-            .OneOf,
-        };
         const documentation = try self.parseDocumentationGroupForCurrentPosition();
         const nameToken = self.consumeRequiredToken(.Identifier, "message name") catch |err| {
             return self.recover(err, MessageEntryRecoveryPoints, true);
@@ -598,7 +607,7 @@ const Context = struct {
                         .syntaxErr => if (try self.recoverSyntaxError(MessageBodyRecoveryPoints, true)) break,
                     }
                 },
-                .Identifier => try fields.append(try self.parseField(null)),
+                .Identifier => try fields.append(try (try self.parseField(null)).unwrap()),
                 .Embed => {
                     self.consume();
                     try embeddedMessages.append(try self.parseSelector());
@@ -607,7 +616,7 @@ const Context = struct {
                     const start = token.position;
                     self.consume();
                     const oneOfNameToken = try self.consumeRequiredToken(.Identifier, "oneof group name");
-                    const oneOfBlock = try self.parseOneOfBody(oneOfGroups.items.len, &fields);
+                    const oneOfBlock = try (try self.parseOneOfBody(oneOfGroups.items.len, &fields)).unwrap();
                     try oneOfGroups.append(ast.OneOf{
                         .name = ast.Identifier{
                             .value = try self.copyString(oneOfNameToken.literal),
@@ -646,33 +655,22 @@ const Context = struct {
         });
     }
 
-    fn parseField(self: *Context, oneOfGroupIndex: ?usize) Error!ast.Field {
-        const documentation = try self.consumeStagedDocumentationFor(self.it.currentAssumeSafe().position);
-        const nameToken = try self.consumeRequiredToken(.Identifier, "field name");
-        _ = try self.consumeRequiredToken(.Colon, ":");
-
-        const dataType = try self.parseFieldDataType();
-        var tag: ?u32 = null;
-        if (self.consumeOptionalTokenBool(.Equal)) {
-            const tagToken = try self.consumeRequiredToken(.Integer, "field tag number");
-            if (std.math.cast(u32, tagToken.kind.Integer)) |tagValue| {
-                if (tagValue == 0) {
-                    self.addError(SyntaxError.fieldTagNumericalError(&tagToken));
-                }
-                tag = tagValue;
-            } else {
-                self.addError(SyntaxError.fieldTagNumericalError(&tagToken));
-            }
-        }
-        const options = try self.parseItemOptions();
-
+    inline fn buildField(
+        self: *Context,
+        nameToken: scanner.Token,
+        documentation: ?ast.Documentation,
+        options: []ast.OptionAssignmentNode,
+        tag: ?u32,
+        dataType: ast.Field.RangedDataType,
+        oneOfGroupIndex: ?usize,
+    ) Allocator.Error!ast.Field {
         return ast.Field{
             .name = .{
                 .value = try self.copyString(nameToken.literal),
                 .range = nameToken.range(),
             },
             .documentation = documentation,
-            .options = try options.unwrap(),
+            .options = options,
             .range = ast.Range{
                 .start = nameToken.position,
                 .endOffset = self.it.currentAssumeSafe().endOffset(),
@@ -683,59 +681,110 @@ const Context = struct {
         };
     }
 
-    fn parseFieldDataType(self: *Context) Error!ast.Field.RangedDataType {
+    fn parseField(self: *Context, oneOfGroupIndex: ?usize) FatalError!ParseResult(ast.Field) {
+        const documentation = try self.consumeStagedDocumentationFor(self.it.currentAssumeSafe().position);
+        const nameToken = self.consumeRequiredToken(.Identifier, "field name") catch |err| return .initErr(err);
+        _ = self.consumeRequiredToken(.Colon, ":") catch |err| return .initErr(err);
+
+        const dataType = blk: {
+            switch (try self.parseFieldDataType()) {
+                .some => |v| {
+                    if (v.scopeExited) {
+                        return .initScopeExited(
+                            try self.buildField(nameToken, documentation, &.{}, null, v.data, oneOfGroupIndex),
+                        );
+                    }
+                    break :blk v.data;
+                },
+                .syntaxErr => return .initSyntaxErr(),
+            }
+        };
+        var tag: ?u32 = null;
+        if (self.consumeOptionalTokenBool(.Equal)) {
+            if (self.consumeRequiredToken(.Integer, "field tag number")) |tagToken| {
+                if (std.math.cast(u32, tagToken.kind.Integer)) |tagValue| {
+                    if (tagValue == 0) {
+                        self.addError(SyntaxError.fieldTagNumericalError(&tagToken));
+                    }
+                    tag = tagValue;
+                } else self.addError(SyntaxError.fieldTagNumericalError(&tagToken));
+            } else |err| if (try self.recoverExitsScope(err, &.{ .Hash, .RawHash, .SharedHash, .Comma }, true)) {
+                return .initScopeExited(
+                    try self.buildField(nameToken, documentation, &.{}, tag, dataType, oneOfGroupIndex),
+                );
+            }
+        }
+
+        return switch (try self.parseItemOptions()) {
+            .some => |v| .initValue(
+                try self.buildField(nameToken, documentation, v.data, tag, dataType, oneOfGroupIndex),
+                v.scopeExited,
+            ),
+            .syntaxErr => .initValue(
+                try self.buildField(nameToken, documentation, &.{}, tag, dataType, oneOfGroupIndex),
+                try self.recoverSyntaxError(MessageBodyRecoveryPoints, true),
+            ),
+        };
+    }
+
+    fn parseFieldDataType(self: *Context) FatalError!ParseResult(ast.Field.RangedDataType) {
         const nextToken = self.it.peek(1) orelse {
             self.addError(SyntaxError.unexpectedEOF());
-            return Error.UnexpectedToken;
+            return .initSyntaxErr();
         };
         switch (nextToken.kind) {
             .Identifier => {
-                const typeSelector = try self.parseSelector();
-                return ast.Field.RangedDataType{
+                const typeSelector = self.parseSelector() catch |err| return .initErr(err);
+                return .initOk(ast.Field.RangedDataType{
                     .value = .{ .String = typeSelector },
                     .range = typeSelector.range,
-                };
+                });
             },
             .OneOf => {
                 const start = nextToken.position;
                 self.consume();
                 var fieldList = std.ArrayList(ast.Field).init(self.allocator);
-                const oneOf = try self.parseOneOfBody(null, &fieldList);
-                return ast.Field.RangedDataType{
-                    .value = .{ .OneOf = oneOf },
-                    .range = ast.Range{
-                        .start = start,
-                        .endOffset = self.it.currentAssumeSafe().endOffset(),
+                switch (try self.parseOneOfBody(null, &fieldList)) {
+                    .some => |v| {
+                        return .initValue(ast.Field.RangedDataType{
+                            .value = .{ .OneOf = v.data },
+                            .range = ast.Range{
+                                .start = start,
+                                .endOffset = self.it.currentAssumeSafe().endOffset(),
+                            },
+                        }, v.scopeExited);
                     },
-                };
+                    .syntaxErr => return .initSyntaxErr(),
+                }
             },
             .List => {
                 const start = nextToken.position;
                 self.consume();
-                _ = try self.consumeRequiredToken(.LessThan, "<");
-                const typeSelector = try self.parseSelector();
-                const lastToken = try self.consumeRequiredToken(.GreaterThan, ">");
-                return ast.Field.RangedDataType{
+                _ = self.consumeRequiredToken(.LessThan, "<") catch |err| return .initErr(err);
+                const typeSelector = self.parseSelector() catch |err| return .initErr(err);
+                const lastToken = self.consumeRequiredToken(.GreaterThan, ">") catch |err| return .initErr(err);
+                return .initOk(ast.Field.RangedDataType{
                     .value = .{ .List = typeSelector },
                     .range = ast.Range{ .start = start, .endOffset = lastToken.endOffset() },
-                };
+                });
             },
             .Map => {
                 const start = nextToken.position;
                 self.consume();
-                _ = try self.consumeRequiredToken(.LessThan, "<");
-                const keyTypeSelector = try self.parseSelector();
-                _ = try self.consumeRequiredToken(.Comma, ",");
-                const valueTypeSelector = try self.parseSelector();
-                const lastToken = try self.consumeRequiredToken(.GreaterThan, ">");
-                return ast.Field.RangedDataType{
+                _ = self.consumeRequiredToken(.LessThan, "<") catch |err| return .initErr(err);
+                const keyTypeSelector = self.parseSelector() catch |err| return .initErr(err);
+                _ = self.consumeRequiredToken(.Comma, ",") catch |err| return .initErr(err);
+                const valueTypeSelector = self.parseSelector() catch |err| return .initErr(err);
+                const lastToken = self.consumeRequiredToken(.GreaterThan, ">") catch |err| return .initErr(err);
+                return .initOk(ast.Field.RangedDataType{
                     .value = .{ .Map = .{ .key = keyTypeSelector, .value = valueTypeSelector } },
                     .range = ast.Range{ .start = start, .endOffset = lastToken.endOffset() },
-                };
+                });
             },
             else => {
                 self.addError(SyntaxError.expectToken(&nextToken, "field type"));
-                return Error.UnexpectedToken;
+                self.consume();
+                return .initSyntaxErr();
             },
         }
     }
@@ -745,35 +794,65 @@ const Context = struct {
         self: *Context,
         oneOfGroupIndex: ?usize,
         fields: *std.ArrayList(ast.Field),
-    ) Error!ast.Field.OneOfTypeInfo {
-        _ = try self.consumeRequiredToken(.LeftCurlyBrace, "{");
+    ) FatalError!ParseResult(ast.Field.OneOfTypeInfo) {
+        const OneOfBodyRecoveryPoints: []const TokenKindTag = &.{
+            .Hash,
+            .SharedHash,
+            .RawHash,
+            .Comma,
+            .Identifier,
+        };
+        _ = self.consumeRequiredToken(.LeftCurlyBrace, "{") catch |err| return .initErr(err);
         var options = std.ArrayList(ast.OptionAssignmentNode).init(self.allocator);
         const initialPosition = fields.items.len;
+        const currentScope = self.scopeDelimiterContext();
 
-        while (true) {
-            const nextToken = self.it.peek(1) orelse {
-                self.addError(SyntaxError.unexpectedEOF());
-                return Error.UnexpectedToken;
-            };
-            switch (nextToken.kind) {
-                .Identifier => try fields.append(try self.parseField(oneOfGroupIndex)),
-                .Hash, .RawHash, .SharedHash => try options.append(try (try self.parseOption(false, null)).unwrap()),
-                .RightCurlyBrace => {
-                    self.consume();
-                    break;
-                },
-                else => {
-                    self.addError(SyntaxError.unexpectedToken(&nextToken));
-                    return Error.UnexpectedToken;
-                },
+        const scopeExited = blk: {
+            while (true) {
+                const nextToken = self.it.peek(1) orelse {
+                    self.addError(SyntaxError.unexpectedEOF());
+                    return .initSyntaxErr();
+                };
+                switch (nextToken.kind) {
+                    .Identifier => switch (try self.parseField(oneOfGroupIndex)) {
+                        .some => |v| {
+                            // append the field
+                            try fields.append(v.data);
+                            if (v.scopeExited) break :blk self.scopeDelimiterContext() + 1 != currentScope;
+                        },
+                        .syntaxErr => if (try self.recoverSyntaxError(OneOfBodyRecoveryPoints, true))
+                            break :blk self.scopeDelimiterContext() + 1 != currentScope,
+                    },
+                    .Hash, .RawHash, .SharedHash => switch (try self.parseOption(false, null)) {
+                        .some => |v| {
+                            try options.append(v.data);
+                            if (v.scopeExited) break :blk self.scopeDelimiterContext() + 1 != currentScope;
+                        },
+                        .syntaxErr => if (try self.recoverSyntaxError(OneOfBodyRecoveryPoints, true))
+                            break :blk self.scopeDelimiterContext() + 1 != currentScope,
+                    },
+                    .RightCurlyBrace => {
+                        self.consume();
+                        self.popScopeDelimiter(.CurlyBrace);
+                        break :blk false;
+                    },
+                    else => {
+                        self.addError(SyntaxError.unexpectedToken(&nextToken));
+                        if (try self.skipTokensUntil(OneOfBodyRecoveryPoints, true))
+                            break :blk self.scopeDelimiterContext() + 1 != currentScope;
+                    },
+                }
+                _ = self.consumeOptionalTokenBool(.Comma);
             }
-            _ = self.consumeOptionalTokenBool(.Comma);
-        }
-
-        return ast.Field.OneOfTypeInfo{
-            .fields = fields.items[initialPosition..],
-            .options = options.items,
         };
+
+        return .initValue(
+            ast.Field.OneOfTypeInfo{
+                .fields = fields.items[initialPosition..],
+                .options = options.items,
+            },
+            scopeExited,
+        );
     }
 
     fn parseItemOptions(self: *Context) FatalError!ParseResult([]ast.OptionAssignmentNode) {
@@ -840,7 +919,7 @@ const Context = struct {
                     self.consume();
                     break;
                 },
-                else => try fields.append(try self.parseField(null)),
+                else => try fields.append(try (try self.parseField(null)).unwrap()),
             }
             _ = self.consumeOptionalTokenBool(.Comma);
         }
@@ -1672,6 +1751,13 @@ const Context = struct {
 
     inline fn consume(self: *Context) void {
         self.it.i += 1;
+    }
+
+    inline fn peekNextOrError(self: *Context) error{UnexpectedToken}!scanner.Token {
+        return self.it.peek(1) orelse {
+            self.addError(SyntaxError.unexpectedEOF());
+            return error.UnexpectedToken;
+        };
     }
 
     inline fn copyString(self: Context, ref: []const u8) Allocator.Error![]const u8 {

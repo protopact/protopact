@@ -88,6 +88,7 @@ pub const Field = struct {
     range: Range,
     /// captured documentation for the field.
     documentation: ?Documentation,
+    // TODO: this shouldn't be variable based on the system, should be either u16 or u32.
     oneOfGroupIndex: ?usize,
 
     pub const DataType = union(enum) {
