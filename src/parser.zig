@@ -350,7 +350,7 @@ const Context = struct {
         }
 
         const pathToken = self.consumeRequiredToken(.String, "path string") catch |err| {
-            return self.recover(err, &[_]TokenKindTag{ .String, .Underscore, .Identifier }, true);
+            return self.recover(err, &.{ .String, .Underscore, .Identifier }, true);
         };
         try self.imports.append(.{
             .implicit = implicit,
@@ -454,9 +454,8 @@ const Context = struct {
                 },
                 else => {
                     self.addError(SyntaxError.unexpectedToken(&token));
-                    if (try self.skipTokensUntil(EnumBodyRecoveryPoints, false)) {
+                    if (try self.skipTokensUntil(EnumBodyRecoveryPoints, false))
                         break;
-                    }
                 },
             }
             _ = self.consumeOptionalTokenBool(.Comma);
