@@ -163,54 +163,28 @@ pub const SyntaxError = struct {
     }
 };
 
-/// A result type that can be used to communicated partial data with need for recovery, complete data without any need
-/// for recovery or no data with only an error.
-// TODO: Okay so ParseResult is really a simple struct with data and scopeExited.
-// All that the switch case is doing can be replaced with the following pattern:
-// if (self.parseSomething()) |value| {
-//   // append the value
-//   if (value.scopeExited()) {
-//      // break away
-//   }
-// } else |err| if (try self.recoverExitsScope(err, &.{}, true)) break;
+/// Result of a parse operation with some partial or complete data.
+/// If the parse operation is successful or partial but with a successful recovery, scopeExited is false.
+/// If recovery leads to escaping the parent scope, then scopeExited is true and means the caller's scope is
+/// exited.
 fn ParseResult(T: type) type {
-    return union(enum) {
-        /// regardless of any syntax error, some data is parsed and if as part of any recovery process, the current
-        /// scope is exited, the caller need to cease processing their scope immediately without consuming any tokens.
-        some: struct { data: T, scopeExited: bool },
-        /// a syntax error is encountered and no data could be parsed as a result of it.
-        syntaxErr: void,
+    return struct {
+        /// data is the
+        data: T,
+        scopeExited: bool,
 
         const Self = @This();
 
         fn initOk(value: T) Self {
-            return .{ .some = .{ .data = value, .scopeExited = false } };
+            return .{ .data = value, .scopeExited = false };
         }
 
         fn initScopeExited(value: T) Self {
-            return .{ .some = .{ .data = value, .scopeExited = true } };
-        }
-
-        fn initSyntaxErr() Self {
-            return .{ .syntaxErr = {} };
-        }
-
-        fn unwrap(self: Self) Error!T {
-            return switch (self) {
-                .some => |v| v.data,
-                .syntaxErr => Error.UnexpectedToken,
-            };
+            return .{ .data = value, .scopeExited = true };
         }
 
         fn initValue(value: T, scopeExited: bool) Self {
-            return .{ .some = .{ .data = value, .scopeExited = scopeExited } };
-        }
-
-        fn initErr(err: Error) FatalError!Self {
-            return switch (err) {
-                Error.UnexpectedToken => .initSyntaxErr(),
-                else => |e| e,
-            };
+            return .{ .data = value, .scopeExited = scopeExited };
         }
     };
 }
@@ -408,7 +382,7 @@ const Context = struct {
     }
 
     fn processConstBody(self: *Context) Error!void {
-        const ConstRecoveryPoints = &[_]TokenKindTag{ .Documentation, .Identifier };
+        const ConstRecoveryPoints: []const TokenKindTag = &.{ .Documentation, .Identifier };
         const documentation = try self.parseDocumentationGroupForCurrentPosition();
         const start = self.currentPosition();
         const nameToken = self.consumeRequiredToken(.Identifier, "const name") catch |err| {
@@ -418,33 +392,24 @@ const Context = struct {
             return self.recover(err, ConstRecoveryPoints, false);
         };
 
-        const value = switch (try self.parseValue()) {
-            .some => |v| blk: {
+        const value = if (self.parseValue()) |v| blk: {
+            if (v.scopeExited) {
+                try self.addConst(nameToken.literal, v.data, documentation, start, &.{});
+                return;
+            }
+            break :blk v.data;
+        } else |err| return self.recover(err, ConstRecoveryPoints, false);
+
+        const options: []ast.OptionAssignmentNode = if (self.nextTokenIs(.LeftCurlyBrace)) blk: {
+            if (self.parseOptionBlock()) |v| {
                 if (v.scopeExited) {
-                    try self.addConst(nameToken.literal, v.data, documentation, start, &.{});
+                    try self.addConst(nameToken.literal, value, documentation, start, v.data);
                     return;
                 }
                 break :blk v.data;
-            },
-            // TODO: we might need a different version of self.recover, something like recoverSyntaxError
-            // and maybe the recoverSyntaxError should gaurantee FatalError.
-            .syntaxErr => return self.recover(error.UnexpectedToken, ConstRecoveryPoints, false),
-        };
-
-        const options: []ast.OptionAssignmentNode = if (self.nextTokenIs(.LeftCurlyBrace)) blk: {
-            switch (try self.parseOptionBlock()) {
-                .some => |v| {
-                    if (v.scopeExited) {
-                        try self.addConst(nameToken.literal, value, documentation, start, v.data);
-                        return Error.UnexpectedToken;
-                    }
-                    break :blk v.data;
-                },
-                .syntaxErr => {
-                    // TODO: same as above.
-                    try self.addConst(nameToken.literal, value, documentation, start, &.{});
-                    return self.recover(error.UnexpectedToken, ConstRecoveryPoints, false);
-                },
+            } else |err| {
+                try self.addConst(nameToken.literal, value, documentation, start, &.{});
+                return self.recover(err, ConstRecoveryPoints, false);
             }
         } else &.{};
 
@@ -468,30 +433,19 @@ const Context = struct {
         var options = std.ArrayList(ast.OptionAssignmentNode).init(self.allocator);
         var variants = std.ArrayList(ast.EnumVariant).init(self.allocator);
         while (true) {
-            const token = self.it.peek(1) orelse {
-                self.addError(SyntaxError.unexpectedEOF());
-                return Error.UnexpectedToken;
-            };
+            const token = try self.peekNextOrError();
             switch (token.kind) {
                 .Comment => self.consume(),
-                .Hash, .RawHash, .SharedHash => {
-                    switch (try self.parseOption(false, null)) {
-                        .some => |v| {
-                            try options.append(v.data);
-                            if (v.scopeExited) break;
-                        },
-                        .syntaxErr => if (try self.recoverSyntaxError(EnumBodyRecoveryPoints, true)) break,
-                    }
-                },
-                .Identifier => {
-                    switch (try self.parseEnumVariant()) {
-                        .some => |value| {
-                            try variants.append(value.data);
-                            if (value.scopeExited) break;
-                        },
-                        .syntaxErr => if (try self.recoverSyntaxError(EnumBodyRecoveryPoints, true)) break,
-                    }
-                },
+                .Hash, .RawHash, .SharedHash => if (self.parseOption(false, null)) |v| {
+                    try options.append(v.data);
+                    if (v.scopeExited) break;
+                } else |err| if (try self.recoverExitsScope(err, EnumBodyRecoveryPoints, true))
+                    break,
+                .Identifier => if (self.parseEnumVariant()) |v| {
+                    try variants.append(v.data);
+                    if (v.scopeExited) break;
+                } else |err| if (try self.recoverExitsScope(err, EnumBodyRecoveryPoints, true))
+                    break,
                 .Documentation => try self.captureDocumentationGroup(),
                 .RightCurlyBrace => {
                     self.consume();
@@ -539,9 +493,9 @@ const Context = struct {
         };
     }
 
-    fn parseEnumVariant(self: *Context) FatalError!ParseResult(ast.EnumVariant) {
+    fn parseEnumVariant(self: *Context) Error!ParseResult(ast.EnumVariant) {
         const documentation = try self.consumeStagedDocumentationFor(self.it.currentAssumeSafe().position);
-        const nameToken = self.consumeRequiredToken(.Identifier, "enum value") catch |err| return .initErr(err);
+        const nameToken = try self.consumeRequiredToken(.Identifier, "enum value");
         var value: ?u32 = null;
 
         if (self.consumeOptionalTokenBool(.Equal)) {
@@ -557,16 +511,13 @@ const Context = struct {
             }
         }
 
-        return switch (try self.parseItemOptions()) {
-            .some => |v| .initValue(
-                try self.buildEnumVariant(nameToken, value, documentation, v.data),
-                v.scopeExited,
-            ),
-            .syntaxErr => .initValue(
-                try self.buildEnumVariant(nameToken, value, documentation, &.{}),
-                try self.recoverSyntaxError(EnumBodyRecoveryPoints, true),
-            ),
-        };
+        return if (self.parseItemOptions()) |v| .initValue(
+            try self.buildEnumVariant(nameToken, value, documentation, v.data),
+            v.scopeExited,
+        ) else |err| .initValue(
+            try self.buildEnumVariant(nameToken, value, documentation, &.{}),
+            try self.recoverExitsScope(err, EnumBodyRecoveryPoints, true),
+        );
     }
 
     fn processMessage(self: *Context) Error!void {
@@ -596,18 +547,12 @@ const Context = struct {
             switch (token.kind) {
                 .Comment => self.consume(),
                 .Documentation => try self.captureDocumentationGroup(),
-                .Hash, .RawHash, .SharedHash => {
-                    switch (try self.parseOption(false, null)) {
-                        .some => |v| {
-                            try options.append(v.data);
-                            if (v.scopeExited) {
-                                break;
-                            }
-                        },
-                        .syntaxErr => if (try self.recoverSyntaxError(MessageBodyRecoveryPoints, true)) break,
-                    }
-                },
-                .Identifier => try fields.append(try (try self.parseField(null)).unwrap()),
+                .Hash, .RawHash, .SharedHash => if (self.parseOption(false, null)) |v| {
+                    try options.append(v.data);
+                    if (v.scopeExited) break;
+                } else |err| if (try self.recoverExitsScope(err, MessageBodyRecoveryPoints, true))
+                    break,
+                .Identifier => try fields.append((try self.parseField(null)).data),
                 .Embed => {
                     self.consume();
                     try embeddedMessages.append(try self.parseSelector());
@@ -616,7 +561,7 @@ const Context = struct {
                     const start = token.position;
                     self.consume();
                     const oneOfNameToken = try self.consumeRequiredToken(.Identifier, "oneof group name");
-                    const oneOfBlock = try (try self.parseOneOfBody(oneOfGroups.items.len, &fields)).unwrap();
+                    const oneOfBlock = (try self.parseOneOfBody(oneOfGroups.items.len, &fields)).data;
                     try oneOfGroups.append(ast.OneOf{
                         .name = ast.Identifier{
                             .value = try self.copyString(oneOfNameToken.literal),
@@ -681,24 +626,17 @@ const Context = struct {
         };
     }
 
-    fn parseField(self: *Context, oneOfGroupIndex: ?usize) FatalError!ParseResult(ast.Field) {
+    fn parseField(self: *Context, oneOfGroupIndex: ?usize) Error!ParseResult(ast.Field) {
         const documentation = try self.consumeStagedDocumentationFor(self.it.currentAssumeSafe().position);
-        const nameToken = self.consumeRequiredToken(.Identifier, "field name") catch |err| return .initErr(err);
-        _ = self.consumeRequiredToken(.Colon, ":") catch |err| return .initErr(err);
+        const nameToken = try self.consumeRequiredToken(.Identifier, "field name");
+        _ = try self.consumeRequiredToken(.Colon, ":");
 
-        const dataType = blk: {
-            switch (try self.parseFieldDataType()) {
-                .some => |v| {
-                    if (v.scopeExited) {
-                        return .initScopeExited(
-                            try self.buildField(nameToken, documentation, &.{}, null, v.data, oneOfGroupIndex),
-                        );
-                    }
-                    break :blk v.data;
-                },
-                .syntaxErr => return .initSyntaxErr(),
-            }
-        };
+        const dataType = try self.parseFieldDataType();
+        if (dataType.scopeExited) {
+            return .initScopeExited(
+                try self.buildField(nameToken, documentation, &.{}, null, dataType.data, oneOfGroupIndex),
+            );
+        }
         var tag: ?u32 = null;
         if (self.consumeOptionalTokenBool(.Equal)) {
             if (self.consumeRequiredToken(.Integer, "field tag number")) |tagToken| {
@@ -710,31 +648,25 @@ const Context = struct {
                 } else self.addError(SyntaxError.fieldTagNumericalError(&tagToken));
             } else |err| if (try self.recoverExitsScope(err, &.{ .Hash, .RawHash, .SharedHash, .Comma }, true)) {
                 return .initScopeExited(
-                    try self.buildField(nameToken, documentation, &.{}, tag, dataType, oneOfGroupIndex),
+                    try self.buildField(nameToken, documentation, &.{}, tag, dataType.data, oneOfGroupIndex),
                 );
             }
         }
 
-        return switch (try self.parseItemOptions()) {
-            .some => |v| .initValue(
-                try self.buildField(nameToken, documentation, v.data, tag, dataType, oneOfGroupIndex),
-                v.scopeExited,
-            ),
-            .syntaxErr => .initValue(
-                try self.buildField(nameToken, documentation, &.{}, tag, dataType, oneOfGroupIndex),
-                try self.recoverSyntaxError(MessageBodyRecoveryPoints, true),
-            ),
-        };
+        return if (self.parseItemOptions()) |v| .initValue(
+            try self.buildField(nameToken, documentation, v.data, tag, dataType.data, oneOfGroupIndex),
+            v.scopeExited,
+        ) else |err| .initValue(
+            try self.buildField(nameToken, documentation, &.{}, tag, dataType.data, oneOfGroupIndex),
+            try self.recoverExitsScope(err, MessageBodyRecoveryPoints, true),
+        );
     }
 
-    fn parseFieldDataType(self: *Context) FatalError!ParseResult(ast.Field.RangedDataType) {
-        const nextToken = self.it.peek(1) orelse {
-            self.addError(SyntaxError.unexpectedEOF());
-            return .initSyntaxErr();
-        };
+    fn parseFieldDataType(self: *Context) Error!ParseResult(ast.Field.RangedDataType) {
+        const nextToken = try self.peekNextOrError();
         switch (nextToken.kind) {
             .Identifier => {
-                const typeSelector = self.parseSelector() catch |err| return .initErr(err);
+                const typeSelector = try self.parseSelector();
                 return .initOk(ast.Field.RangedDataType{
                     .value = .{ .String = typeSelector },
                     .range = typeSelector.range,
@@ -744,25 +676,21 @@ const Context = struct {
                 const start = nextToken.position;
                 self.consume();
                 var fieldList = std.ArrayList(ast.Field).init(self.allocator);
-                switch (try self.parseOneOfBody(null, &fieldList)) {
-                    .some => |v| {
-                        return .initValue(ast.Field.RangedDataType{
-                            .value = .{ .OneOf = v.data },
-                            .range = ast.Range{
-                                .start = start,
-                                .endOffset = self.it.currentAssumeSafe().endOffset(),
-                            },
-                        }, v.scopeExited);
+                const oneOfBody = try self.parseOneOfBody(null, &fieldList);
+                return .initValue(ast.Field.RangedDataType{
+                    .value = .{ .OneOf = oneOfBody.data },
+                    .range = ast.Range{
+                        .start = start,
+                        .endOffset = self.it.currentAssumeSafe().endOffset(),
                     },
-                    .syntaxErr => return .initSyntaxErr(),
-                }
+                }, oneOfBody.scopeExited);
             },
             .List => {
                 const start = nextToken.position;
                 self.consume();
-                _ = self.consumeRequiredToken(.LessThan, "<") catch |err| return .initErr(err);
-                const typeSelector = self.parseSelector() catch |err| return .initErr(err);
-                const lastToken = self.consumeRequiredToken(.GreaterThan, ">") catch |err| return .initErr(err);
+                _ = try self.consumeRequiredToken(.LessThan, "<");
+                const typeSelector = try self.parseSelector();
+                const lastToken = try self.consumeRequiredToken(.GreaterThan, ">");
                 return .initOk(ast.Field.RangedDataType{
                     .value = .{ .List = typeSelector },
                     .range = ast.Range{ .start = start, .endOffset = lastToken.endOffset() },
@@ -771,11 +699,11 @@ const Context = struct {
             .Map => {
                 const start = nextToken.position;
                 self.consume();
-                _ = self.consumeRequiredToken(.LessThan, "<") catch |err| return .initErr(err);
-                const keyTypeSelector = self.parseSelector() catch |err| return .initErr(err);
-                _ = self.consumeRequiredToken(.Comma, ",") catch |err| return .initErr(err);
-                const valueTypeSelector = self.parseSelector() catch |err| return .initErr(err);
-                const lastToken = self.consumeRequiredToken(.GreaterThan, ">") catch |err| return .initErr(err);
+                _ = try self.consumeRequiredToken(.LessThan, "<");
+                const keyTypeSelector = try self.parseSelector();
+                _ = try self.consumeRequiredToken(.Comma, ",");
+                const valueTypeSelector = try self.parseSelector();
+                const lastToken = try self.consumeRequiredToken(.GreaterThan, ">");
                 return .initOk(ast.Field.RangedDataType{
                     .value = .{ .Map = .{ .key = keyTypeSelector, .value = valueTypeSelector } },
                     .range = ast.Range{ .start = start, .endOffset = lastToken.endOffset() },
@@ -784,7 +712,7 @@ const Context = struct {
             else => {
                 self.addError(SyntaxError.expectToken(&nextToken, "field type"));
                 self.consume();
-                return .initSyntaxErr();
+                return Error.UnexpectedToken;
             },
         }
     }
@@ -794,7 +722,7 @@ const Context = struct {
         self: *Context,
         oneOfGroupIndex: ?usize,
         fields: *std.ArrayList(ast.Field),
-    ) FatalError!ParseResult(ast.Field.OneOfTypeInfo) {
+    ) Error!ParseResult(ast.Field.OneOfTypeInfo) {
         const OneOfBodyRecoveryPoints: []const TokenKindTag = &.{
             .Hash,
             .SharedHash,
@@ -802,35 +730,26 @@ const Context = struct {
             .Comma,
             .Identifier,
         };
-        _ = self.consumeRequiredToken(.LeftCurlyBrace, "{") catch |err| return .initErr(err);
+        _ = try self.consumeRequiredToken(.LeftCurlyBrace, "{");
         var options = std.ArrayList(ast.OptionAssignmentNode).init(self.allocator);
         const initialPosition = fields.items.len;
         const currentScope = self.scopeDelimiterContext();
 
         const scopeExited = blk: {
             while (true) {
-                const nextToken = self.it.peek(1) orelse {
-                    self.addError(SyntaxError.unexpectedEOF());
-                    return .initSyntaxErr();
-                };
+                const nextToken = self.it.peek(1) orelse break :blk false;
                 switch (nextToken.kind) {
-                    .Identifier => switch (try self.parseField(oneOfGroupIndex)) {
-                        .some => |v| {
-                            // append the field
-                            try fields.append(v.data);
-                            if (v.scopeExited) break :blk self.scopeDelimiterContext() + 1 != currentScope;
-                        },
-                        .syntaxErr => if (try self.recoverSyntaxError(OneOfBodyRecoveryPoints, true))
-                            break :blk self.scopeDelimiterContext() + 1 != currentScope,
-                    },
-                    .Hash, .RawHash, .SharedHash => switch (try self.parseOption(false, null)) {
-                        .some => |v| {
-                            try options.append(v.data);
-                            if (v.scopeExited) break :blk self.scopeDelimiterContext() + 1 != currentScope;
-                        },
-                        .syntaxErr => if (try self.recoverSyntaxError(OneOfBodyRecoveryPoints, true))
-                            break :blk self.scopeDelimiterContext() + 1 != currentScope,
-                    },
+                    .Identifier => if (self.parseField(oneOfGroupIndex)) |v| {
+                        // append the field
+                        try fields.append(v.data);
+                        if (v.scopeExited) break :blk true;
+                    } else |err| if (try self.recoverExitsScope(err, OneOfBodyRecoveryPoints, true))
+                        break :blk true,
+                    .Hash, .RawHash, .SharedHash => if (self.parseOption(false, null)) |v| {
+                        try options.append(v.data);
+                        if (v.scopeExited) break :blk true;
+                    } else |err| if (try self.recoverExitsScope(err, OneOfBodyRecoveryPoints, true))
+                        break :blk true,
                     .RightCurlyBrace => {
                         self.consume();
                         self.popScopeDelimiter(.CurlyBrace);
@@ -839,7 +758,7 @@ const Context = struct {
                     else => {
                         self.addError(SyntaxError.unexpectedToken(&nextToken));
                         if (try self.skipTokensUntil(OneOfBodyRecoveryPoints, true))
-                            break :blk self.scopeDelimiterContext() + 1 != currentScope;
+                            break :blk true;
                     },
                 }
                 _ = self.consumeOptionalTokenBool(.Comma);
@@ -851,11 +770,11 @@ const Context = struct {
                 .fields = fields.items[initialPosition..],
                 .options = options.items,
             },
-            scopeExited,
+            scopeExited and self.scopeDelimiterContext() + 1 != currentScope,
         );
     }
 
-    fn parseItemOptions(self: *Context) FatalError!ParseResult([]ast.OptionAssignmentNode) {
+    fn parseItemOptions(self: *Context) Error!ParseResult([]ast.OptionAssignmentNode) {
         const RecoveryPoints: []const TokenKindTag = &.{ .Comma, .RawHash, .Hash, .SharedHash };
 
         if (self.nextTokenIs(.LeftCurlyBrace)) {
@@ -864,23 +783,16 @@ const Context = struct {
 
         var values = std.ArrayList(ast.OptionAssignmentNode).init(self.allocator);
         const scopeExited = blk: {
-            mainLoop: while (true) {
+            while (true) {
                 const token = self.it.peek(1) orelse break :blk false;
                 if (token.kind == .RightCurlyBrace or token.kind == .Comma) {
                     break :blk false;
                 }
-                switch (try self.parseOption(false, null)) {
-                    .some => |v| {
-                        try values.append(v.data);
-                        if (v.scopeExited) {
-                            break :blk true;
-                        }
-                    },
-                    .syntaxErr => if (try self.recoverSyntaxError(RecoveryPoints, true))
-                        break :blk true
-                    else
-                        continue :mainLoop,
-                }
+                if (self.parseOption(false, null)) |v| {
+                    try values.append(v.data);
+                    if (v.scopeExited) break :blk true;
+                } else |err| if (try self.recoverExitsScope(err, RecoveryPoints, true))
+                    break :blk true;
             }
         };
 
@@ -919,7 +831,7 @@ const Context = struct {
                     self.consume();
                     break;
                 },
-                else => try fields.append(try (try self.parseField(null)).unwrap()),
+                else => try fields.append((try self.parseField(null)).data),
             }
             _ = self.consumeOptionalTokenBool(.Comma);
         }
@@ -976,7 +888,7 @@ const Context = struct {
             switch (nextToken.kind) {
                 .Comment => self.consume(),
                 .Hash, .SharedHash, .RawHash => {
-                    try options.append(try (try self.parseOption(false, null)).unwrap());
+                    try options.append((try self.parseOption(false, null)).data);
                     _ = self.consumeOptionalTokenBool(.Comma);
                 },
                 .Documentation => try self.captureDocumentationGroup(),
@@ -1048,12 +960,13 @@ const Context = struct {
         if (self.nextTokenIs(.LeftCurlyBrace)) {
             // 1. Either a block with an optional semicolon.
             const optionBlock = try self.parseOptionBlock();
-            options = try optionBlock.unwrap();
+            options = optionBlock.data;
             _ = self.consumeOptionalTokenBool(.Semicolon);
         } else {
             // 2. or a series of option statement followed by a semicolon.
             var list = std.ArrayList(ast.OptionAssignmentNode).init(self.allocator);
             while (true) {
+                // TODO: probably need to handle this a bit more gracefully.
                 const nextToken = self.it.peek(1) orelse {
                     self.addError(SyntaxError.unexpectedEOF());
                     return Error.UnexpectedToken;
@@ -1062,7 +975,7 @@ const Context = struct {
                     self.consume();
                     break;
                 }
-                try list.append(try (try self.parseOption(false, null)).unwrap());
+                try list.append((try self.parseOption(false, null)).data);
             }
             options = list.items;
         }
@@ -1136,18 +1049,20 @@ const Context = struct {
         if (self.nextTokenIs(.LeftCurlyBrace)) {
             // block mode.
             const start = self.currentPosition();
+            // TODO: don't I have to recover from this here? what happens if at this point, we return UnexpectedToken?
             const blockOptions = try self.parseOptionBlock();
             const rootOption = ast.OptionAssignmentNode{
                 .shared = modifiers.shared,
                 .raw = modifiers.raw,
-                .selector = ast.Selector.init(&[_]u8{}, ast.Range.empty()),
+                .selector = ast.Selector.init(&.{}, ast.Range.empty()),
                 .range = ast.Range{ .start = start, .endOffset = self.it.currentAssumeSafe().endOffset() },
-                .value = .{ .Group = try blockOptions.unwrap() },
+                .value = .{ .Group = blockOptions.data },
             };
             try self.options.append(rootOption);
         } else {
+            // TODO: I probably have to handle the scope exited error, no?
             const option = try self.parseOption(false, modifiers);
-            try self.options.append(try option.unwrap());
+            try self.options.append(option.data);
         }
     }
 
@@ -1187,16 +1102,12 @@ const Context = struct {
         self: *Context,
         comptime blockMode: bool,
         capturedModifiers: ?OptionModifiers,
-    ) FatalError!ParseResult(ast.OptionAssignmentNode) {
-        const modifiers = capturedModifiers orelse
-            self.parseOptionModifiers(!blockMode) catch |err| return .initErr(err);
+    ) Error!ParseResult(ast.OptionAssignmentNode) {
+        const modifiers = capturedModifiers orelse try self.parseOptionModifiers(!blockMode);
         const start = self.currentPosition();
 
         // Parse the key.
-        const keyToken = self.it.peek(1) orelse {
-            self.addError(SyntaxError.unexpectedEOF());
-            return .initSyntaxErr();
-        };
+        const keyToken = try self.peekNextOrError();
         const selector = switch (keyToken.kind) {
             .String => blk: {
                 if (!modifiers.raw) {
@@ -1205,19 +1116,19 @@ const Context = struct {
                 self.consume();
                 break :blk ast.Selector.init(keyToken.kind.String, keyToken.range());
             },
-            .Identifier => self.parseSelector() catch |err| return .initErr(err),
+            .Identifier => try self.parseSelector(),
             else => {
                 self.addError(SyntaxError.expectToken(&keyToken, "option identifier or key"));
                 self.consume();
-                return .initSyntaxErr();
+                return Error.UnexpectedToken;
             },
         };
         // Parse the value, which can be a curly braces for blocks, a literal or nothing at all to indicate a flag.
         if (self.it.peek(1)) |valueToken| switch (valueToken.kind) {
             .LeftCurlyBrace => {
                 const currentScope = self.scopeDelimiterContext();
-                return switch (try self.parseOptionBlock()) {
-                    .some => |v| .initValue(.{
+                return if (self.parseOptionBlock()) |v| .initValue(
+                    .{
                         .shared = modifiers.shared,
                         .raw = modifiers.raw,
                         .selector = selector,
@@ -1226,15 +1137,15 @@ const Context = struct {
                             .start = start,
                             .endOffset = self.it.currentAssumeSafe().endOffset(),
                         },
-                    }, v.scopeExited and (self.scopeDelimiterContext() + 1 != currentScope)),
-                    .syntaxErr => .initSyntaxErr(),
-                };
+                    },
+                    v.scopeExited and (self.scopeDelimiterContext() + 1 != currentScope),
+                ) else |err| err;
             },
             .Equal => {
                 self.consume();
                 const currentScope = self.scopeDelimiterContext();
-                return switch (try self.parseValue()) {
-                    .some => |v| .initValue(.{
+                return if (self.parseValue()) |v| .initValue(
+                    .{
                         .shared = modifiers.shared,
                         .raw = modifiers.raw,
                         .selector = selector,
@@ -1243,9 +1154,9 @@ const Context = struct {
                             .start = start,
                             .endOffset = v.data.range.endOffset,
                         },
-                    }, v.scopeExited and (self.scopeDelimiterContext() + 1 != currentScope)),
-                    .syntaxErr => .initSyntaxErr(),
-                };
+                    },
+                    v.scopeExited and (self.scopeDelimiterContext() + 1 != currentScope),
+                ) else |err| err;
             },
             else => {},
         };
@@ -1265,7 +1176,7 @@ const Context = struct {
         });
     }
 
-    fn parseOptionBlock(self: *Context) FatalError!ParseResult([]ast.OptionAssignmentNode) {
+    fn parseOptionBlock(self: *Context) Error!ParseResult([]ast.OptionAssignmentNode) {
         const OptionBlockRecoveryPoints: []const TokenKindTag = &.{
             .Comma,
             .Identifier,
@@ -1275,30 +1186,21 @@ const Context = struct {
             .SharedHash,
         };
         var values = std.ArrayList(ast.OptionAssignmentNode).init(self.allocator);
-        _ = self.consumeRequiredToken(.LeftCurlyBrace, "{") catch |err| return .initErr(err);
+        _ = try self.consumeRequiredToken(.LeftCurlyBrace, "{");
         const currentScope = self.scopeDelimiterContext();
         const needsRecovery = blk: {
             while (true) {
-                const token = self.it.peek(1) orelse {
-                    self.addError(SyntaxError.unexpectedEOF());
-                    return .initSyntaxErr();
-                };
+                const token = self.it.peek(1) orelse break :blk false;
                 if (token.kind == .RightCurlyBrace) {
                     self.consume();
                     self.popScopeDelimiter(.CurlyBrace);
                     break :blk false;
                 }
-                switch (try self.parseOption(true, null)) {
-                    .some => |v| {
-                        try values.append(v.data);
-                        if (v.scopeExited) {
-                            break :blk true;
-                        }
-                    },
-                    .syntaxErr => if (try self.recoverSyntaxError(OptionBlockRecoveryPoints, true)) {
-                        break :blk true;
-                    },
-                }
+                if (self.parseOption(true, null)) |v| {
+                    try values.append(v.data);
+                    if (v.scopeExited) break :blk true;
+                } else |err| if (try self.recoverExitsScope(err, OptionBlockRecoveryPoints, true))
+                    break :blk true;
 
                 _ = self.consumeOptionalTokenBool(.Comma);
             }
@@ -1310,7 +1212,7 @@ const Context = struct {
     /// parses an array of ranged values.
     ///
     /// NOTE: It assumes the the left bracket is already consumed.
-    fn parseValueArray(self: *Context) FatalError!ParseResult(ast.RangedValue) {
+    fn parseValueArray(self: *Context) Error!ParseResult(ast.RangedValue) {
         const ArrayRecoveryPoints: []const TokenKindTag = &.{
             .String,
             .Integer,
@@ -1329,30 +1231,23 @@ const Context = struct {
 
         const needsRecovery = blk: {
             while (true) {
-                const next = self.it.peek(1) orelse {
-                    self.addError(SyntaxError.unexpectedEOF());
-                    // TODO: would it not be better to just return UnexpectedEOF?
-                    // and to provide a helper method try self.peekNextOrError()?
-                    return .initSyntaxErr();
-                };
+                const next = self.it.peek(1) orelse break :blk false;
                 if (next.kind == .RightBracket) {
                     self.popScopeDelimiter(.Bracket);
                     self.consume();
+                    // TODO: can this be simplified to just currentAssumeSafe()?
                     end = next.endOffset();
                     break :blk false;
                 }
-                switch (try self.parseValue()) {
-                    .some => |v| {
-                        try values.append(v.data);
-                        if (v.scopeExited) {
-                            end = self.it.currentAssumeSafe().endOffset();
-                            break :blk true;
-                        }
-                    },
-                    .syntaxErr => if (try self.recoverSyntaxError(ArrayRecoveryPoints, false)) {
+                if (self.parseValue()) |v| {
+                    try values.append(v.data);
+                    if (v.scopeExited) {
                         end = self.it.currentAssumeSafe().endOffset();
                         break :blk true;
-                    },
+                    }
+                } else |err| if (try self.recoverExitsScope(err, ArrayRecoveryPoints, false)) {
+                    end = self.it.currentAssumeSafe().endOffset();
+                    break :blk true;
                 }
                 _ = self.consumeOptionalTokenBool(.Comma);
             }
@@ -1367,7 +1262,7 @@ const Context = struct {
     /// parses a map of ranged values.
     ///
     /// NOTE: It assumes the the left curly brace is already consumed.
-    fn parseValueObject(self: *Context) FatalError!ParseResult(ast.RangedValue) {
+    fn parseValueObject(self: *Context) Error!ParseResult(ast.RangedValue) {
         const ObjectRecoveryPoints: []const TokenKindTag = &.{ .String, .Comma };
         try self.pushScopeDelimiter(.CurlyBrace);
         var values = std.ArrayList(ast.Entry).init(self.allocator);
@@ -1377,10 +1272,7 @@ const Context = struct {
 
         const needsRecovery = blk: {
             mainLoop: while (true) {
-                const next = self.it.next() orelse {
-                    self.addError(SyntaxError.unexpectedEOF());
-                    return .initSyntaxErr();
-                };
+                const next = self.it.next() orelse break :blk false;
                 switch (next.kind) {
                     .RightCurlyBrace => {
                         end = next.endOffset();
@@ -1395,27 +1287,28 @@ const Context = struct {
                             _ = self.consumeOptionalTokenBool(.Comma);
                             continue :mainLoop;
                         };
-                        switch (try self.parseValue()) {
-                            .some => |v| {
-                                try values.append(.{
-                                    .key = try self.copyString(next.kind.String),
-                                    .value = v.data,
-                                });
-                                if (v.scopeExited) {
-                                    end = self.it.currentAssumeSafe().endOffset();
-                                    break :blk true;
-                                }
-                            },
-                            .syntaxErr => if (try self.recoverSyntaxError(ObjectRecoveryPoints, false)) {
+                        if (self.parseValue()) |v| {
+                            try values.append(.{
+                                .key = try self.copyString(next.kind.String),
+                                .value = v.data,
+                            });
+                            if (v.scopeExited) {
+                                // TODO: can this be simplfieid to just currentAssumeSafe at the end?
+                                // what if we see EOF, would that still work?
+                                // add tests for it.
                                 end = self.it.currentAssumeSafe().endOffset();
                                 break :blk true;
-                            },
+                            }
+                        } else |err| if (try self.recoverExitsScope(err, ObjectRecoveryPoints, false)) {
+                            end = self.it.currentAssumeSafe().endOffset();
+                            break :blk true;
                         }
                         _ = self.consumeOptionalTokenBool(.Comma);
                     },
                     else => {
+                        // TODO: this should probably recover instead, no?
                         self.addError(SyntaxError.expectToken(&next, "key string literal"));
-                        return .initSyntaxErr();
+                        return Error.UnexpectedToken;
                     },
                 }
             }
@@ -1427,11 +1320,8 @@ const Context = struct {
         }, needsRecovery and (self.scopeDelimiterContext() + 1 != currentScope));
     }
 
-    fn parseValue(self: *Context) FatalError!ParseResult(ast.RangedValue) {
-        const token = self.it.next() orelse {
-            self.addError(SyntaxError.unexpectedEOF());
-            return .initSyntaxErr();
-        };
+    fn parseValue(self: *Context) Error!ParseResult(ast.RangedValue) {
+        const token = self.it.next() orelse return Error.UnexpectedToken;
         return switch (token.kind) {
             .String => .initOk(.{
                 .range = token.range(),
@@ -1457,7 +1347,7 @@ const Context = struct {
             .LeftCurlyBrace => self.parseValueObject(),
             else => {
                 self.addError(SyntaxError.expectToken(&token, "value"));
-                return .initSyntaxErr();
+                return Error.UnexpectedToken;
             },
         };
     }
@@ -1877,11 +1767,18 @@ const Context = struct {
         err: Error,
         comptime tokens: []const TokenKindTag,
         comptime untilEndOfLine: bool,
-    ) FatalError!bool {
-        return switch (err) {
-            error.UnexpectedToken => self.recoverSyntaxError(tokens, untilEndOfLine),
-            else => |e| e,
-        };
+    ) Error!bool {
+        if (err != Error.UnexpectedToken) {
+            return err;
+        }
+
+        self.it.i -= 1; // revert the token consumption.
+        // NB: Inside a scope, go until you find next entry token or falling outside of the
+        // current scope.
+        return if (self.scopeDelimiterContext() > 0)
+            self.skipTokensUntil(tokens, untilEndOfLine)
+        else
+            self.skipTokensUntil(EntryKeywords, untilEndOfLine);
     }
 
     /// similar to recover but returns whether or not the current scope is exited.
