@@ -1,18 +1,22 @@
-==empty interface
+# empty interface
+
+```pactum
 interface UserService {
 }
+```
 
-
---
+```yaml
 options:
 interfaces:
   - name: "UserService"
     range: "1:11[10-25]"
     options:
     funcs:
+```
 
+# interface with functions and no param
 
-==interface with functions and no param
+```pactum
 interface UserService {
 	s#openapi.tags = ["tag one" "tag two"]
 
@@ -21,9 +25,9 @@ interface UserService {
 	FuncWithoutParamWithOptionsBlock() {}
 	FuncWithoutParamWithOptionsBlockAndSemicolon() {};
 }
+```
 
-
---
+```yaml
 options:
 interfaces:
   - name: "UserService"
@@ -76,18 +80,20 @@ interfaces:
         input: null
         output: null
         options:
+```
 
+# interface with args and tags
 
-==interface with args and tags
+```pactum
 interface UserService {
 	FuncWithInput(some_pact.Input) = 1;
 	FuncWithStreamingInputEmptyOutput(stream some_pact.Input) -> () = 2 s#api.deprecated;
 	FuncWithOutputArgs(stream some_pact.Input) -> some_pact.Output = 3 {};
 	FuncWithStreamingArgs(stream some_pact.Input) -> stream some_pact.Output = 4 {}
 }
+```
 
-
---
+```yaml
 options:
 interfaces:
   - name: "UserService"
@@ -151,3 +157,4 @@ interfaces:
             range: "5:58[277-293]"
           streaming: true
         options:
+```

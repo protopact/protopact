@@ -1,13 +1,17 @@
-==pact documentation
+# pact documentation
+
+```pactum
 /// this is a documentation
+```
 
-
---
+```yaml
 documentation: |
-   this is a documentation
+  this is a documentation
+```
 
+# multi-line documentation
 
-==multi-line documentation
+```pactum
 /// this is a documentation
 // with comment in between
 /// more documentation
@@ -15,18 +19,19 @@ documentation: |
 /**
  * multiple-lines
  */
+```
 
-
---
+```yaml
 documentation: |
-   this is a documentation
-   more documentation
-   a different style of documentation 
-  
-   * multiple-lines
+  this is a documentation
+  more documentation
+  a different style of documentation 
+  * multiple-lines
+```
 
+# message documentation
 
-==message documentation
+```pactum
 /// this is a documentation for the pact
 pact something
 
@@ -37,25 +42,27 @@ message SomeMessage {
 	// there can be comments as well.
   some_field: string = 1 #optional
 }
+```
 
-
---
+```yaml
 documentation: |
-   this is a documentation for the pact
+  this is a documentation for the pact
 messages:
   - name: "SomeMessage"
     documentation: |
-       This is a documentation for the message!
+      This is a documentation for the message!
     fields:
       - name: "some_field"
         documentation: |
-           This is a documentation for the field.
+          This is a documentation for the field.
         type: "string"
         tag: 1
         options:
+```
 
+# message group
 
-==message group
+```pactum
 /// this is a documentation for the pact
 pact something
 
@@ -73,29 +80,30 @@ message (
 	AnotherOne {
 	}
 )
+```
 
-
---
+```yaml
 documentation: |
-   this is a documentation for the pact
+  this is a documentation for the pact
 messages:
   - name: "SomeMessage"
     documentation: |
-       This is a documentation for the message!
+      This is a documentation for the message!
     fields:
       - name: "some_field"
         documentation: |
-           This is a documentation for the field.
+          This is a documentation for the field.
         type: "string"
         tag: 1
         options:
   - name: "AnotherOne"
     documentation: |
-       Another documentation.
+      Another documentation.
+```
 
+# interface documentation
 
-
-==interface documentation
+```pactum
 /// this is a documentation for the pact
 pact something
 
@@ -106,22 +114,24 @@ interface SomeService {
 	// there can be comments as well.
   SomeFunc();
 }
+```
 
-
---
+```yaml
 documentation: |
-   this is a documentation for the pact
+  this is a documentation for the pact
 interfaces:
   - name: "SomeService"
     documentation: |
-       This is a documentation for the interface!
+      This is a documentation for the interface!
     funcs:
       - name: "SomeFunc"
         documentation: |
-           This is a documentation for the func.
+          This is a documentation for the func.
+```
 
+# interface group
 
-==interface group
+```pactum
 /// this is a documentation for the pact
 pact something
 
@@ -134,22 +144,24 @@ interface (
     SomeFunc();
   }
 )
+```
 
-
---
+```yaml
 documentation: |
-   this is a documentation for the pact
+  this is a documentation for the pact
 interfaces:
   - name: "SomeService"
     documentation: |
-       This is a documentation for the interface!
+      This is a documentation for the interface!
     funcs:
       - name: "SomeFunc"
         documentation: |
-           This is a documentation for the func.
+          This is a documentation for the func.
+```
 
+# enum documentation
 
-==enum documentation
+```pactum
 /// this is a documentation for the pact
 pact something
 
@@ -166,28 +178,30 @@ enum Color {
 	// gets parsed properly.
 	Blue,
 }
+```
 
-
---
+```yaml
 documentation: |
-   this is a documentation for the pact
+  this is a documentation for the pact
 enums:
   - name: "Color"
     documentation: |
-       This is a documentation for the interface!
+      This is a documentation for the interface!
     variants:
       - name: "Red"
         documentation: |
-           We all know red.
+          We all know red.
       - name: "Green"
         documentation: |
-           Not sure about this one though. 
+          Not sure about this one though. 
       - name: "Blue"
         documentation: |
-           Documentation for blue.
+          Documentation for blue.
+```
 
+# const documentation
 
-==const documentation
+```pactum
 /// this is a documentation for the pact
 pact something
 
@@ -210,26 +224,27 @@ const (
 	// ignore
 	LastOne = { "tags" = [1.2] }
 )
+```
 
-
---
+```yaml
 documentation: |
-   this is a documentation for the pact
+  this is a documentation for the pact
 constants:
   - name: "Name"
     value: "Pactum"
   - name: "Another"
     documentation: |
-       Another is in a group
+      Another is in a group
     value: 1
   - name: "YetAnother"
     documentation: |
-       Documentation
+      Documentation
     value: "Something"
   - name: "LastOne"
     documentation: |
-       Documentation for the last one
+      Documentation for the last one
     value:
         key: "tags"
         value:
             - 1.2
+```

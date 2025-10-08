@@ -42,52 +42,44 @@ fn formatError(writer: anytype, err: parser.SyntaxError) !void {
     });
 }
 
-fn trimAllWhitespace(input: []const u8) []const u8 {
-    var start: usize = 0;
-    var end: usize = input.len - 1;
-    for (input, 0..) |value, i| {
-        switch (value) {
-            ' ', '\t', '\n', '\r' => continue,
-            else => {
-                start = i;
-                break;
-            },
-        }
-    }
-    while (end >= start) {
-        switch (input[end]) {
-            ' ', '\t', '\n', '\r' => end -= 1,
-            else => break,
-        }
-    }
-    return input[start .. end + 1];
+fn captureBlock(source: []const u8, startIndex: usize) !struct { newPos: usize, content: []const u8 } {
+    const blockDelimiter = "```";
+
+    var begin = startIndex + (std.mem.indexOf(
+        u8,
+        source[startIndex..],
+        blockDelimiter,
+    ) orelse return error.BadBlock);
+    // eat the entire line.
+    begin += std.mem.indexOf(u8, source[begin..], "\n") orelse return error.BadBlock;
+    const end = begin + (std.mem.indexOf(u8, source[begin..], blockDelimiter) orelse return error.BadBlock);
+
+    return .{
+        .content = std.mem.trim(u8, source[begin..end], "\n\t\r "),
+        .newPos = end + blockDelimiter.len,
+    };
 }
 
 fn readTestCases(allocator: Allocator, source: String) ![]TestCase {
-    const endOfSource = "\n\n\n--";
     var list = std.ArrayList(TestCase).init(allocator);
 
     var cursor: usize = 0;
     while (true) {
-        var position = cursor + (std.mem.indexOf(u8, source[cursor..], "==") orelse break);
-        const eol = position + (std.mem.indexOf(u8, source[position..], "\n") orelse @panic("invalid test name"));
-        const name = trimAllWhitespace(source[position + 2 .. eol]);
+        const namePos = cursor + (std.mem.indexOf(u8, source[cursor..], "#") orelse break);
+        cursor = namePos + (std.mem.indexOf(u8, source[namePos..], "\n") orelse @panic("invalid test name"));
+        const name = std.mem.trim(u8, source[namePos + 2 .. cursor], "\n\t\r ");
 
-        cursor = eol;
-        position = cursor + (std.mem.indexOf(u8, source[cursor..], endOfSource) orelse
-            @panic("could not read test source code"));
-        const code = trimAllWhitespace(source[cursor..position]);
+        const codeBlock = try captureBlock(source, cursor);
+        cursor = codeBlock.newPos;
 
-        cursor = position + endOfSource.len;
-        if (std.mem.indexOf(u8, source[cursor..], "\n\n==")) |pos| {
-            const expectation = trimAllWhitespace(source[cursor .. cursor + pos]);
-            try list.append(.{ .source = code, .name = name, .expected = expectation });
-            cursor += pos;
-        } else {
-            const expectation = trimAllWhitespace(source[cursor..]);
-            try list.append(.{ .source = code, .name = name, .expected = expectation });
-            break;
-        }
+        const expectationBlock = try captureBlock(source, cursor);
+        cursor = expectationBlock.newPos;
+
+        try list.append(.{
+            .name = name,
+            .source = codeBlock.content,
+            .expected = expectationBlock.content,
+        });
     }
 
     return list.items;
@@ -138,7 +130,7 @@ fn runTests(comptime sourceFileName: []const u8, opts: TestOptions) !void {
             try formatError(output.writer(), err);
         }
 
-        const received = trimAllWhitespace(output.items);
+        const received = std.mem.trim(u8, output.items, "\n\t\r ");
         if (!std.mem.eql(u8, tt.expected, received)) {
             std.debug.print(
                 "Test '{s}' failed\n==== Expected ====\n{s}\n\n==== Received ====\n{s}\n\n",
@@ -150,78 +142,41 @@ fn runTests(comptime sourceFileName: []const u8, opts: TestOptions) !void {
 }
 
 test "pact" {
-    try runTests("./data/parser/pact.txt", .{
+    try runTests("./data/parser/pact.md", .{
         .marshaler = astcoder.YamlMarshaller{
             .expandSelectors = true,
-            .excludeZeroValues = false,
             .includePact = true,
-            .includeImport = false,
-            .includeOptionAssignments = false,
-            .includeConstants = false,
-            .includeEnums = false,
-            .includeMessages = false,
-            .includeOptionDefinitions = false,
-            .includeInterfaces = false,
             .includeRange = true,
-            .includeDocumentation = false,
         },
         .writeDocumentOnError = false,
     });
 }
 
 test "import" {
-    try runTests("./data/parser/import.txt", .{
+    try runTests("./data/parser/import.md", .{
         .marshaler = astcoder.YamlMarshaller{
-            .expandSelectors = false,
-            .excludeZeroValues = false,
-            .includePact = false,
             .includeImport = true,
-            .includeOptionAssignments = false,
-            .includeConstants = false,
-            .includeEnums = false,
-            .includeMessages = false,
-            .includeOptionDefinitions = false,
-            .includeInterfaces = false,
             .includeRange = true,
-            .includeDocumentation = false,
         },
         .writeDocumentOnError = false,
     });
 }
 
 test "options" {
-    try runTests("./data/parser/options.txt", .{
+    try runTests("./data/parser/options.md", .{
         .marshaler = astcoder.YamlMarshaller{
-            .expandSelectors = false,
-            .excludeZeroValues = false,
-            .includePact = false,
-            .includeImport = false,
             .includeOptionAssignments = true,
-            .includeConstants = false,
-            .includeEnums = false,
-            .includeMessages = false,
-            .includeOptionDefinitions = false,
-            .includeInterfaces = false,
             .includeRange = true,
-            .includeDocumentation = false,
         },
         .writeDocumentOnError = true,
     });
 }
 
-test "const" {
-    try runTests("./data/parser/constants.txt", .{
+test "constants" {
+    try runTests("./data/parser/constants.md", .{
         .marshaler = astcoder.YamlMarshaller{
-            .expandSelectors = false,
-            .excludeZeroValues = false,
-            .includePact = false,
-            .includeImport = false,
             .includeOptionAssignments = true,
             .includeConstants = true,
-            .includeEnums = false,
-            .includeMessages = false,
-            .includeOptionDefinitions = false,
-            .includeInterfaces = false,
             .includeRange = true,
             .includeDocumentation = true,
         },
@@ -229,19 +184,11 @@ test "const" {
     });
 }
 
-test "enum" {
-    try runTests("./data/parser/enums.txt", .{
+test "enums" {
+    try runTests("./data/parser/enums.md", .{
         .marshaler = astcoder.YamlMarshaller{
-            .expandSelectors = false,
-            .excludeZeroValues = false,
-            .includePact = false,
-            .includeImport = false,
             .includeOptionAssignments = true,
-            .includeConstants = false,
             .includeEnums = true,
-            .includeMessages = false,
-            .includeOptionDefinitions = false,
-            .includeInterfaces = false,
             .includeRange = true,
             .includeDocumentation = true,
         },
@@ -250,18 +197,10 @@ test "enum" {
 }
 
 test "messages" {
-    try runTests("./data/parser/messages.txt", .{
+    try runTests("./data/parser/messages.md", .{
         .marshaler = astcoder.YamlMarshaller{
-            .expandSelectors = false,
-            .excludeZeroValues = false,
-            .includePact = false,
-            .includeImport = false,
             .includeOptionAssignments = true,
-            .includeConstants = false,
-            .includeEnums = false,
             .includeMessages = true,
-            .includeOptionDefinitions = false,
-            .includeInterfaces = false,
             .includeRange = true,
             .includeDocumentation = true,
         },
@@ -270,37 +209,20 @@ test "messages" {
 }
 
 test "option definitions" {
-    try runTests("./data/parser/option_definitions.txt", .{
+    try runTests("./data/parser/option_definitions.md", .{
         .marshaler = astcoder.YamlMarshaller{
-            .expandSelectors = false,
-            .excludeZeroValues = false,
-            .includePact = false,
-            .includeImport = false,
             .includeOptionAssignments = true,
-            .includeConstants = false,
-            .includeEnums = false,
-            .includeMessages = false,
             .includeOptionDefinitions = true,
-            .includeInterfaces = false,
             .includeRange = true,
-            .includeDocumentation = false,
         },
         .writeDocumentOnError = true,
     });
 }
 
-test "interface definitions" {
-    try runTests("./data/parser/interfaces.txt", .{
+test "interfaces" {
+    try runTests("./data/parser/interfaces.md", .{
         .marshaler = astcoder.YamlMarshaller{
-            .expandSelectors = false,
-            .excludeZeroValues = false,
-            .includePact = false,
-            .includeImport = false,
             .includeOptionAssignments = true,
-            .includeConstants = false,
-            .includeEnums = false,
-            .includeMessages = false,
-            .includeOptionDefinitions = false,
             .includeRange = true,
             .includeInterfaces = true,
             .includeDocumentation = true,
@@ -310,18 +232,12 @@ test "interface definitions" {
 }
 
 test "documentation" {
-    try runTests("./data/parser/documentation.txt", .{
+    try runTests("./data/parser/documentation.md", .{
         .marshaler = astcoder.YamlMarshaller{
-            .expandSelectors = false,
             .excludeZeroValues = true,
-            .includePact = false,
-            .includeImport = false,
-            .includeOptionAssignments = false,
             .includeConstants = true,
             .includeEnums = true,
             .includeMessages = true,
-            .includeOptionDefinitions = false,
-            .includeRange = false,
             .includeInterfaces = true,
             .includeDocumentation = true,
         },
@@ -330,9 +246,8 @@ test "documentation" {
 }
 
 test "errors" {
-    try runTests("./data/parser/errors.txt", .{
+    try runTests("./data/parser/errors.md", .{
         .marshaler = astcoder.YamlMarshaller{
-            .expandSelectors = false,
             .excludeZeroValues = true,
             .includePact = true,
             .includeImport = true,
@@ -341,7 +256,6 @@ test "errors" {
             .includeEnums = true,
             .includeMessages = true,
             .includeOptionDefinitions = true,
-            .includeRange = false,
             .includeInterfaces = true,
             .includeDocumentation = true,
         },

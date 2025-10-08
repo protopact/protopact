@@ -693,13 +693,15 @@ fn Context(comptime Writer: type) type {
             if (documentation) |doc| {
                 try self.writeKey("documentation");
                 try self.writer.writeAll(" |\n");
-                self.incrIndent();
-                defer self.decrIndent();
+                self.indentation += 1;
+                defer self.indentation -= 1;
                 var cursor: usize = 0;
                 while (cursor < doc.content.len) {
                     const end = cursor + (std.mem.indexOf(u8, doc.content[cursor..], "\n") orelse break);
-                    try self.writer.writeByteNTimes(' ', self.indentation);
-                    try self.writer.writeAll(doc.content[cursor .. end + 1]);
+                    if ((end - cursor) > 0) {
+                        try self.writer.writeByteNTimes(' ', self.indentation);
+                        try self.writer.writeAll(doc.content[cursor .. end + 1]);
+                    } else try self.writer.writeAll("\n\n");
                     cursor = end + 1;
                 }
                 try self.writeNewLine();
@@ -725,18 +727,18 @@ fn Context(comptime Writer: type) type {
 pub const YamlMarshaller = struct {
     const Self = @This();
 
-    expandSelectors: bool,
-    includeRange: bool,
-    excludeZeroValues: bool,
-    includePact: bool,
-    includeImport: bool,
-    includeOptionAssignments: bool,
-    includeConstants: bool,
-    includeEnums: bool,
-    includeMessages: bool,
-    includeOptionDefinitions: bool,
-    includeInterfaces: bool,
-    includeDocumentation: bool,
+    expandSelectors: bool = false,
+    includeRange: bool = false,
+    excludeZeroValues: bool = false,
+    includePact: bool = false,
+    includeImport: bool = false,
+    includeOptionAssignments: bool = false,
+    includeConstants: bool = false,
+    includeEnums: bool = false,
+    includeMessages: bool = false,
+    includeOptionDefinitions: bool = false,
+    includeInterfaces: bool = false,
+    includeDocumentation: bool = false,
 
     pub fn writeDocument(self: Self, writer: anytype, doc: ast.Document) !void {
         var filteredWriter = newlineFilterWriter(writer);

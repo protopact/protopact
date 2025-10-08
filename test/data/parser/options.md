@@ -1,8 +1,10 @@
-==simple flag
+# simple flag
+
+```pactum
 #required
+```
 
-
---
+```yaml
 options:
   - raw: false
     shared: false
@@ -13,13 +15,15 @@ options:
     value:
       range: "1:2[1-9]"
       data: true
+```
 
+# shared flag
 
-==shared flag
+```pactum
 s#optional
+```
 
-
---
+```yaml
 options:
   - raw: false
     shared: true
@@ -30,13 +34,15 @@ options:
     value:
       range: "1:3[2-10]"
       data: true
+```
 
+# raw shared flag
 
-==raw shared flag
+```pactum
 r#optional
+```
 
-
---
+```yaml
 options:
   - raw: true
     shared: true
@@ -47,13 +53,15 @@ options:
     value:
       range: "1:3[2-10]"
       data: true
+```
 
+# raw shared flag (string)
 
-==raw shared flag (string)
+```pactum
 r#"optional"
+```
 
-
---
+```yaml
 options:
   - raw: true
     shared: true
@@ -64,13 +72,15 @@ options:
     value:
       range: "1:3[2-12]"
       data: true
+```
 
+# raw shared flag - complex string (string)
 
-==raw shared flag - complex string (string)
+```pactum
 r#"com.pancake.io/optional"
+```
 
-
---
+```yaml
 options:
   - raw: true
     shared: true
@@ -81,13 +91,15 @@ options:
     value:
       range: "1:3[2-27]"
       data: true
+```
 
+# raw without indicating raw
 
-==raw without indicating raw
+```pactum
 #"something"
+```
 
-
---
+```yaml
 options:
   - raw: false
     shared: false
@@ -100,13 +112,15 @@ options:
       data: true
 
 1:2[1-12] use of raw identifier without raw modifier prefix, did you mean to use r# ? @literal="something"
+```
 
+# string assignment
 
-==string assignment
+```pactum
 s#json.name = "Pancake"
+```
 
-
---
+```yaml
 options:
   - raw: false
     shared: true
@@ -117,13 +131,15 @@ options:
     value:
       range: "1:15[14-23]"
       data: "Pancake"
+```
 
+# number assignment
 
-==number assignment
+```pactum
 s#json.`option` = 256
+```
 
-
---
+```yaml
 options:
   - raw: false
     shared: true
@@ -134,13 +150,15 @@ options:
     value:
       range: "1:19[18-21]"
       data: 256
+```
 
+# float assignment
 
-==float assignment
+```pactum
 #`message` = 1.592
+```
 
-
---
+```yaml
 options:
   - raw: false
     shared: false
@@ -151,13 +169,15 @@ options:
     value:
       range: "1:14[13-18]"
       data: 1.592
+```
 
+# bool assignment (true)
 
-== bool assignment (true)
+```pactum
 #required = true
+```
 
-
---
+```yaml
 options:
   - raw: false
     shared: false
@@ -168,13 +188,15 @@ options:
     value:
       range: "1:13[12-16]"
       data: true
+```
 
+# bool assignment (false)
 
-==bool assignment (false)
+```pactum
 #optional = false
+```
 
-
---
+```yaml
 options:
   - raw: false
     shared: false
@@ -185,9 +207,11 @@ options:
     value:
       range: "1:13[12-17]"
       data: false
+```
 
+# array string
 
-==array string
+```pactum
 #items = ["a" "b" "c"]
 r#items.with.comma = ["a", "b", "c"]
 s#`items` = [
@@ -195,9 +219,9 @@ s#`items` = [
 	"b",
 	"c",
 ]
+```
 
-
---
+```yaml
 options:
   - raw: false
     shared: false
@@ -244,13 +268,15 @@ options:
           data: "b"
         - range: "6:2[87-90]"
           data: "c"
+```
 
+# array mixed
 
-==array mixed
+```pactum
 #items = [1 false 1.4 ["a" "b"] "c"]
+```
 
-
---
+```yaml
 options:
   - raw: false
     shared: false
@@ -275,13 +301,15 @@ options:
               data: "b"
         - range: "1:33[32-35]"
           data: "c"
+```
 
+# object
 
-==object
+```pactum
 #items = { "name" = "Pancake", "kind" = "food", "id" = 1 }
+```
 
-
---
+```yaml
 options:
   - raw: false
     shared: false
@@ -304,9 +332,11 @@ options:
         value:
           range: "1:56[55-56]"
           data: 1
+```
 
+# complex everything #1
 
-==complex everything #1
+```pactum
 r#"com.meshapi:meta" = {
 	"required" = true,
 	"no comma" = 1
@@ -322,9 +352,9 @@ r#"com.meshapi:meta" = {
 		}
 	}
 }
+```
 
-
---
+```yaml
 options:
   - raw: true
     shared: true
@@ -377,17 +407,19 @@ options:
                         value:
                           range: "11:16[176-185]"
                           data: "Pancake"
+```
 
+# option block
 
-==option block
+```pactum
 r#"com.meshapi" {
 	name = "Pancake"
 	s#required,
 	id = 12
 }
+```
 
-
---
+```yaml
 options:
   - raw: true
     shared: true
@@ -423,17 +455,19 @@ options:
         value:
           range: "4:7[55-57]"
           data: 12
+```
 
+# root level block
 
-==root level block
+```pactum
 s# {
 	name = "Pancake"
 	r#required,
 	id = 12
 }
+```
 
-
---
+```yaml
 options:
   - raw: false
     shared: true
@@ -469,3 +503,4 @@ options:
         value:
           range: "4:7[42-44]"
           data: 12
+```

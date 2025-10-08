@@ -1,8 +1,10 @@
-==one liner
+# one liner
+
+```pactum
 enum Color { Red, Green, Blue }
+```
 
-
---
+```yaml
 options:
 enums:
   - name: "Color"
@@ -21,13 +23,15 @@ enums:
         range: "1:26[25-29]"
         value: null
         options:
+```
 
+# value assignment and variant options
 
-==value assignment and variant options
+```pactum
 enum Color { Red = 1, Green #required, Blue = 51 s#ignore r#"meshapi.io:name" = "b" }
+```
 
-
---
+```yaml
 options:
 enums:
   - name: "Color"
@@ -73,9 +77,11 @@ enums:
             value:
               range: "1:81[80-83]"
               data: "b"
+```
 
+# enum options
 
-==enum options
+```pactum
 enum Color {
   s#openapi {
 		description = "Represents an RGB color."
@@ -90,9 +96,9 @@ enum Color {
 	Blue,
 	Green,
 }
+```
 
-
---
+```yaml
 options:
 enums:
   - name: "Color"
@@ -156,9 +162,11 @@ enums:
         range: "13:2[141-146]"
         value: null
         options:
+```
 
+# enum group
 
-==enum group
+```pactum
 enum ()
 enum (
 	Color { Red, Green, Blue }
@@ -169,9 +177,9 @@ enum (
 		Excited,
 	}
 )
+```
 
-
---
+```yaml
 options:
 enums:
   - name: "Color"
@@ -210,9 +218,11 @@ enums:
         range: "8:3[83-90]"
         value: null
         options:
+```
 
+# block options
 
-==block options
+```pactum
 enum Color {
 	WithComma {
 		s#shared_option = 1
@@ -223,9 +233,9 @@ enum Color {
 	}
 	LastVariant = 3
 }
+```
 
-
---
+```yaml
 options:
 enums:
   - name: "Color"
@@ -271,16 +281,18 @@ enums:
         range: "9:2[134-149]"
         value: 3
         options:
+```
 
+# invalid tag
 
-==invalid tag
+```pactum
 enum Color {
 	Red = -1 #ignore,
 	Blue = 9999999999999999
 }
+```
 
-
---
+```txt
 options:
 enums:
   - name: "Color"
@@ -307,3 +319,4 @@ enums:
 
 2:8[20-22] enum value must be a positive integer from 0 to 2^32-1 @literal=-1
 3:9[40-56] enum value must be a positive integer from 0 to 2^32-1 @literal=9999999999999999
+```

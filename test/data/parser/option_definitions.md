@@ -1,10 +1,12 @@
-==simple definition
+# simple definition
+
+```pactum
 option for Pact {
 	export_files: bool
 }
+```
 
-
---
+```yaml
 options:
 option_definitions:
   - targets:
@@ -17,9 +19,11 @@ option_definitions:
         type_range: "2:16[33-37]"
         tag: null
         options:
+```
 
+# multiple targets
 
-==multiple targets
+```pactum
 option for Pact, Interface, Func {
 	export_files: bool = 1 #optional,
 	either_this_or_that: oneof {
@@ -27,9 +31,9 @@ option for Pact, Interface, Func {
 		that: list<wellknown.Timestamp>
 	}
 }
+```
 
-
---
+```yaml
 options:
 option_definitions:
   - targets:
@@ -73,54 +77,63 @@ option_definitions:
         type_range: "3:23[92-150]"
         tag: null
         options:
+```
 
+# no for, no target
 
-==no for, no target
+```pactum
 option {
 	export_files: bool = 1 #optional,
 }
+```
 
-
---
+```yaml
 options:
 option_definitions:
 
 1:8[7] expected for @literal={
+```
 
+# no target
 
-==no target
+```pactum
 option for {
 	export_files: bool = 1 #optional,
 }
+```
 
-
---
+```yaml
 options:
 option_definitions:
 
 1:12[11] expected option target @literal={
+```
 
+# bad comma
 
-==bad comma
+```pactum
 option for Enum, {
 	export_files: bool = 1 #optional,
 }
+```
 
-
---
+```yaml
 options:
 option_definitions:
 
 1:18[17] expected option target @literal={
+```
 
+# bad comma
 
-==bad comma
+```pactum
 option for Enum {
 	export_files: bool = 1 #optional,
+```
 
-
---
+```yaml
 options:
 option_definitions:
 
 0:0[0] unexpected end of file @literal=
+```

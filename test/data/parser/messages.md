@@ -1,9 +1,11 @@
-==empty message
+# empty message
+
+```pactum
 message User {
 }
+```
 
-
---
+```yaml
 options:
 messages:
   - name: "User"
@@ -12,15 +14,17 @@ messages:
     options:
     oneof_groups:
     fields:
+```
 
+# simple message
 
-==simple message
+```pactum
 message User {
   name: string
 }
+```
 
-
---
+```yaml
 options:
 messages:
   - name: "User"
@@ -35,9 +39,11 @@ messages:
         type_range: "2:9[23-29]"
         tag: null
         options:
+```
 
+# embedded message with options
 
-==embedded message with options
+```pactum
 message User {
 	s#openapi {
 		description = "You know, a user"
@@ -48,9 +54,9 @@ message User {
   name: string,
 	age: u32 #optional,
 }
+```
 
-
---
+```yaml
 options:
 messages:
   - name: "User"
@@ -98,9 +104,11 @@ messages:
             value:
               range: "9:12[108-116]"
               data: true
+```
 
+# oneof test
 
-==oneof test
+```pactum
 message User {
 	s#openapi.external_doc = "https://github.com/meshapi"
 	embed Meta,
@@ -120,9 +128,9 @@ message User {
 		map_field: map<string, types.User>
 	}
 }
+```
 
-
---
+```yaml
 options:
 messages:
   - name: "User"
@@ -213,3 +221,4 @@ messages:
         type_range: "13:17[246-356]"
         tag: null
         options:
+```

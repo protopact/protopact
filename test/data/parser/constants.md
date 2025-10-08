@@ -1,8 +1,10 @@
-==simple string
+# simple string
+
+```pactum
 const name = "Pancake"
+```
 
-
---
+```yaml
 options:
 constants:
   - name: "name"
@@ -11,13 +13,15 @@ constants:
       range: "1:14[13-22]"
       data: "Pancake"
     options:
+```
 
+# simple number with options
 
-==simple number with options
+```pactum
 const name = 1 { required }
+```
 
-
---
+```yaml
 options:
 constants:
   - name: "name"
@@ -35,9 +39,11 @@ constants:
         value:
           range: "1:18[17-25]"
           data: true
+```
 
+# const group
 
-==const group
+```pactum
 const (
 	items = ["a" 1 false] { ignore = false }
 	object = {
@@ -45,9 +51,9 @@ const (
 	} { ignore = true }
 	pi = 3.14
 )
+```
 
-
---
+```yaml
 options:
 constants:
   - name: "items"
@@ -96,3 +102,4 @@ constants:
       range: "6:7[112-116]"
       data: 3.14
     options:
+```

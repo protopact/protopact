@@ -1,4 +1,6 @@
-==invalid selector in global scope
+# invalid selector in global scope
+
+```pactum
 pact 1
 pact 2
 
@@ -12,9 +14,9 @@ pact meshapi.gateway..
 message Something {
   name: string #required,
 }
+```
 
-
---
+```yaml
 imports:
   - alias: ""
     implicit: false
@@ -37,17 +39,19 @@ messages:
 2:6[12-13] unexpected token @literal=2
 7:21[77-78] unexpected token @literal=.
 9:22[101-102] unexpected token @literal=.
+```
 
+# unterminated string literals
 
-==unterminated string literals
+```pactum
 pact meshapi.gateway
 
 import "something
 
 interface some_service {}
+```
 
-
---
+```yaml
 pact: "meshapi.gateway"
 imports:
   - alias: ""
@@ -57,9 +61,11 @@ interfaces:
   - name: "some_service"
 
 3:8[29] unterminated string @literal="something
+```
 
+# bad import
 
-==bad import
+```pactum
 pact meshapi.gateway
 
 import
@@ -67,9 +73,9 @@ import
 interface some_service {}
 
 message User {}
+```
 
-
---
+```yaml
 pact: "meshapi.gateway"
 messages:
   - name: "User"
@@ -77,9 +83,11 @@ interfaces:
   - name: "some_service"
 
 5:1[30] expected path string @literal=interface
+```
 
+# unterminated import path inside import group
 
-==unterminated import path inside import group
+```pactum
 pact meshapi.gateway
 
 import (
@@ -90,9 +98,9 @@ import (
 interface some_service {}
 
 message User {}
+```
 
-
---
+```yaml
 pact: "meshapi.gateway"
 imports:
   - alias: ""
@@ -107,9 +115,11 @@ interfaces:
   - name: "some_service"
 
 4:4[34] unterminated string @literal="some/unterminated/string
+```
 
+# incomplete import inside group
 
-==incomplete import inside group
+```pactum
 pact meshapi.gateway
 
 import (
@@ -121,9 +131,9 @@ import (
 interface some_service {}
 
 message User {}
+```
 
-
---
+```yaml
 pact: "meshapi.gateway"
 imports:
   - alias: "some_package"
@@ -138,9 +148,11 @@ interfaces:
   - name: "some_service"
 
 5:2[35] expected path string @literal=some_package
+```
 
+# bad const simple values
 
-==bad const simple values
+```pactum
 pact meshapi.gateway
 
 const (
@@ -153,9 +165,9 @@ const name = pancake
 interface some_service {}
 
 message User {}
+```
 
-
---
+```yaml
 pact: "meshapi.gateway"
 constants:
   - name: "x"
@@ -171,27 +183,29 @@ interfaces:
 5:2[44] expected = @literal=x
 5:10[52] expected const name @literal=5
 9:14[81] expected value @literal=pancake
+```
 
+# bad const
 
-==bad const
+```pactum
 pact meshapi.gateway
 
 const (
 	b = [ 1 2 pancake ]
 	a = {
-		"other_key" = [ 1 2 
+		"other_key" = [ 1 2
 		"some_key" = false
 	}
-	b = 2.3
+    b = 2.3
 	c = false
 )
 
 interface some_service {}
 
 message User {}
+```
 
-
---
+```yaml
 pact: "meshapi.gateway"
 constants:
   - name: "b"
@@ -216,11 +230,13 @@ interfaces:
   - name: "some_service"
 
 4:12[41] expected value @literal=pancake
-7:14[94] expected value @literal==
-8:2[103] expected value @literal=}
+7:14[93] expected value @literal==
+8:2[102] expected value @literal=}
+```
 
+# bad const - nested scope
 
-==bad const - nested scope
+```pactum
 pact meshapi.gateway
 
 const (
@@ -238,9 +254,9 @@ const (
 interface some_service {}
 
 message User {}
+```
 
-
---
+```yaml
 pact: "meshapi.gateway"
 constants:
   - name: "b"
@@ -268,9 +284,11 @@ interfaces:
 
 4:12[41] expected value @literal=pancake
 8:3[103] expected value @literal=}
+```
 
+# bad const - invalid closing
 
-==bad const - invalid closing
+```pactum
 pact meshapi.gateway
 
 const SomeValue = {
@@ -280,9 +298,9 @@ const SomeValue = {
 interface some_service {}
 
 message User {}
+```
 
-
---
+```yaml
 pact: "meshapi.gateway"
 constants:
   - name: "SomeValue"
@@ -298,18 +316,20 @@ interfaces:
 
 4:16[57] expected value @literal=)
 5:1[59-60] unexpected token @literal=}
+```
 
+# bad const - invalid closing - one line apart
 
-==bad const - invalid closing - one line apart
+```pactum
 pact meshapi.gateway
 
 const SomeValue = {
 	"array" = [1 2)
 }
 interface some_service {}
+```
 
-
---
+```yaml
 pact: "meshapi.gateway"
 constants:
   - name: "SomeValue"
@@ -323,18 +343,20 @@ interfaces:
 
 4:16[57] expected value @literal=)
 5:1[59-60] unexpected token @literal=}
+```
 
+# bad const - ignored scoping after unexpected token
 
-==bad const - ignored scoping after unexpected token
+```pactum
 pact meshapi.gateway
 
 const SomeValue = {
 	"array" = [1 2 pancake (false true 1 2 {} []) false
 }
 interface some_service {}
+```
 
-
---
+```yaml
 pact: "meshapi.gateway"
 constants:
   - name: "SomeValue"
@@ -349,18 +371,20 @@ interfaces:
 
 4:17[58] expected value @literal=pancake
 5:1[95] expected value @literal=}
+```
 
+# bad const - comma
 
-==bad const - comma
+```pactum
 pact meshapi.gateway
 
 const SomeValue = {
 	"array" = [1 2 pancake, 3 (false true 1 2 {} []), false,
 }
 interface some_service {}
+```
 
-
---
+```yaml
 pact: "meshapi.gateway"
 constants:
   - name: "SomeValue"
@@ -377,18 +401,20 @@ interfaces:
 4:17[58] expected value @literal=pancake
 4:28[69] expected value @literal=(
 5:1[100] expected value @literal=}
+```
 
+# bad const - options
 
-==bad const - options
+```pactum
 pact meshapi.gateway
 
 const SomeValue = {
 	"array" = [1 2 pancake
 } { required, json.name = pancake, optional )
 interface some_service {}
+```
 
-
---
+```yaml
 pact: "meshapi.gateway"
 constants:
   - name: "SomeValue"
@@ -416,9 +442,11 @@ interfaces:
 4:17[58] expected value @literal=pancake
 5:27[92] expected value @literal=pancake
 5:45[110] expected option identifier or key @literal=)
+```
 
+# bad enum: invalid name token
 
-==bad enum: invalid name token
+```pactum
 pact meshapi.gateway
 
 enum SomeEnum {
@@ -430,9 +458,9 @@ enum SomeEnum {
 interface some_service {}
 
 message User {}
+```
 
-
---
+```yaml
 pact: "meshapi.gateway"
 enums:
   - name: "SomeEnum"
@@ -446,9 +474,11 @@ interfaces:
   - name: "some_service"
 
 5:2[53-58] unexpected token @literal="One"
+```
 
+# bad enum: invalid name token, same line
 
-==bad enum: invalid name token, same line
+```pactum
 pact meshapi.gateway
 
 enum SomeEnum { Unknown = 0, "One", Two }
@@ -456,9 +486,9 @@ enum SomeEnum { Unknown = 0, "One", Two }
 interface some_service {}
 
 message User {}
+```
 
-
---
+```yaml
 pact: "meshapi.gateway"
 enums:
   - name: "SomeEnum"
@@ -472,9 +502,11 @@ interfaces:
   - name: "some_service"
 
 3:30[51-56] unexpected token @literal="One"
+```
 
+# bad enum: invalid variant
 
-==bad enum: invalid variant
+```pactum
 pact meshapi.gateway
 
 enum SomeEnum {
@@ -486,9 +518,9 @@ enum SomeEnum {
 interface some_service {}
 
 message User {}
+```
 
-
---
+```yaml
 pact: "meshapi.gateway"
 enums:
   - name: "SomeEnum"
@@ -502,9 +534,11 @@ interfaces:
 
 4:13[50] expected enum variant numerical value @literal=zero
 5:2[57-62] unexpected token @literal="One"
+```
 
+# bad enum: invalid variant with options
 
-==bad enum: invalid variant with options
+```pactum
 pact meshapi.gateway
 
 enum SomeEnum {
@@ -517,9 +551,9 @@ enum SomeEnum {
 interface some_service {}
 
 message User {}
+```
 
-
---
+```yaml
 pact: "meshapi.gateway"
 enums:
   - name: "SomeEnum"
@@ -566,3 +600,4 @@ interfaces:
 6:60[133] expected value @literal=bad
 7:29[168] expected option identifier or key @literal=option
 10:1[178] expected option setting modifier @literal=interface
+```
