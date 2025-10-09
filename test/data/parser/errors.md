@@ -150,6 +150,22 @@ interfaces:
 5:2[35] expected path string @literal=some_package
 ```
 
+# import group eof
+
+```pactum
+import (
+ _ "some/package"
+```
+
+```yaml
+imports:
+  - alias: ""
+    implicit: true
+    path: "some/package"
+
+0:0[0] unexpected end of file @literal=
+```
+
 # bad const simple values
 
 ```pactum
@@ -444,6 +460,46 @@ interfaces:
 5:45[110] expected option identifier or key @literal=)
 ```
 
+# const group EOF
+
+```pact
+const (
+    A = "1"
+    B = {
+        "key" = "value",
+```
+
+> Duplicated EOF error is not great. It is due to the fact that processX functions do NOT return scopeExited.
+
+```yaml
+constants:
+  - name: "A"
+    value: "1"
+  - name: "B"
+    value:
+        key: "key"
+        value: "value"
+
+0:0[0] unexpected end of file @literal=
+```
+
+# const EOF
+
+```pact
+const B = {
+    "key" = "value",
+```
+
+```yaml
+constants:
+  - name: "B"
+    value:
+        key: "key"
+        value: "value"
+
+0:0[0] unexpected end of file @literal=
+```
+
 # bad enum: invalid name token
 
 ```pactum
@@ -600,4 +656,22 @@ interfaces:
 6:60[133] expected value @literal=bad
 7:29[168] expected option identifier or key @literal=option
 10:1[178] expected option setting modifier @literal=interface
+```
+
+# enum EOF
+
+```pactum
+enum UserType {
+    A,
+    B,
+```
+
+```yaml
+enums:
+  - name: "UserType"
+    variants:
+      - name: "A"
+      - name: "B"
+
+0:0[0] unexpected end of file @literal=
 ```

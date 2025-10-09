@@ -4,7 +4,7 @@ const ast = @import("ast.zig");
 
 const Allocator = std.mem.Allocator;
 
-const Error = error{ UnexpectedToken, NestingDepthReached } || Allocator.Error;
+const Error = error{ UnexpectedToken, UnexpectedEOF, NestingDepthReached } || Allocator.Error;
 const FatalError = error{NestingDepthReached} || Allocator.Error;
 
 const OptionModifiers = struct {
@@ -323,6 +323,7 @@ const Context = struct {
                         return;
                     };
                 },
+                Error.UnexpectedEOF => return,
             };
         }
     }
@@ -755,6 +756,8 @@ const Context = struct {
                         break :blk false;
                     },
                     else => {
+                        // TODO: this is likely incorrect because this incorrect token could very easily
+                        // have been a } to forcefully exit the scope.
                         self.addError(SyntaxError.unexpectedToken(&nextToken));
                         if (try self.skipTokensUntil(OneOfBodyRecoveryPoints, true))
                             break :blk true;
@@ -1012,32 +1015,29 @@ const Context = struct {
         }
 
         while (true) {
-            if (self.it.peek(1)) |next| {
-                if (next.kind == .RightParan) {
-                    self.popScopeDelimiter(.Paran);
-                    self.consume();
-                    break;
-                } else {
-                    handler(self) catch |err| switch (err) {
-                        Error.UnexpectedToken => {
-                            switch (self.scopeDelimiterContext()) {
-                                // outside of the paran scope; stop iterating.
-                                0 => break,
-                                // in the paran scope; skip the current line.
-                                1 => _ = try self.skipTokensUntil(&.{}, true),
-                                // unlikely event, get out of the paran scope.
-                                else => {
-                                    try self.skipTokensUntilRootScope();
-                                    break;
-                                },
-                            }
-                        },
-                        else => return err,
-                    };
-                }
-            } else {
-                self.addError(SyntaxError.unexpectedEOF());
+            const next = self.it.peek(1) orelse
+                return if (self.scopeDelimiterContext() == 0) {} else Error.UnexpectedEOF;
+            if (next.kind == .RightParan) {
+                self.popScopeDelimiter(.Paran);
+                self.consume();
                 break;
+            } else {
+                handler(self) catch |err| switch (err) {
+                    Error.UnexpectedToken => {
+                        switch (self.scopeDelimiterContext()) {
+                            // outside of the paran scope; stop iterating.
+                            0 => break,
+                            // in the paran scope; skip the current line.
+                            1 => if (try self.skipTokensUntil(&.{}, true)) break,
+                            // unlikely event, get out of the paran scope.
+                            else => {
+                                try self.skipTokensUntilRootScope();
+                                break;
+                            },
+                        }
+                    },
+                    else => return err,
+                };
             }
         }
     }
@@ -1068,7 +1068,8 @@ const Context = struct {
     fn parseOptionModifiers(self: *Context, comptime needsHashPrefix: bool) Error!OptionModifiers {
         const token = self.it.peek(1) orelse {
             if (needsHashPrefix) {
-                try self.addErrorTerminal(SyntaxError.unexpectedEOF());
+                self.addError(SyntaxError.unexpectedEOF());
+                return Error.UnexpectedEOF;
             }
 
             return .default();
@@ -1271,7 +1272,7 @@ const Context = struct {
 
         const needsRecovery = blk: {
             mainLoop: while (true) {
-                const next = self.it.next() orelse break :blk false;
+                const next = self.it.next() orelse break :blk true;
                 switch (next.kind) {
                     .RightCurlyBrace => {
                         end = next.endOffset();
@@ -1305,9 +1306,8 @@ const Context = struct {
                         _ = self.consumeOptionalTokenBool(.Comma);
                     },
                     else => {
-                        // TODO: this should probably recover instead, no?
                         self.addError(SyntaxError.expectToken(&next, "key string literal"));
-                        return Error.UnexpectedToken;
+                        break :blk try self.skipTokensUntil(ObjectRecoveryPoints, false);
                     },
                 }
             }
@@ -1561,7 +1561,7 @@ const Context = struct {
             return Error.UnexpectedToken;
         } else {
             self.addError(SyntaxError.unexpectedEOF());
-            return Error.UnexpectedToken;
+            return Error.UnexpectedEOF;
         }
     }
 
@@ -1642,10 +1642,10 @@ const Context = struct {
         self.it.i += 1;
     }
 
-    inline fn peekNextOrError(self: *Context) error{UnexpectedToken}!scanner.Token {
+    inline fn peekNextOrError(self: *Context) error{UnexpectedEOF}!scanner.Token {
         return self.it.peek(1) orelse {
             self.addError(SyntaxError.unexpectedEOF());
-            return error.UnexpectedToken;
+            return error.UnexpectedEOF;
         };
     }
 
@@ -1700,9 +1700,14 @@ const Context = struct {
             return true;
         }
         while (true) {
-            const token = self.it.peek(1) orelse return false;
+            const token = self.it.peek(1) orelse {
+                self.scopeDelimiters.clear();
+                return currentScope > 0;
+            };
             if (token.kind == .EOF) {
-                return false;
+                self.scopeDelimiters.clear();
+                self.consume();
+                return currentScope > 0;
             }
             if (untilEndOfLine) {
                 // skipping the line is only applicable in the same scope.
@@ -1778,23 +1783,6 @@ const Context = struct {
             self.skipTokensUntil(tokens, untilEndOfLine)
         else
             self.skipTokensUntil(EntryKeywords, untilEndOfLine);
-    }
-
-    /// similar to recover but returns whether or not the current scope is exited.
-    /// This is helpful for nested structures such as parsing values, objects, options, etc.
-    // TODO: name is not great, we should rename this so it conveys the intent.
-    inline fn recoverSyntaxError(
-        self: *Context,
-        comptime tokens: []const TokenKindTag,
-        comptime untilEndOfLine: bool,
-    ) error{NestingDepthReached}!bool {
-        self.it.i -= 1; // revert the token consumption.
-        // NB: Inside a scope, go until you find next entry token or falling outside of the
-        // current scope.
-        if (self.scopeDelimiterContext() > 0)
-            return self.skipTokensUntil(tokens, untilEndOfLine)
-        else
-            return self.skipTokensUntil(EntryKeywords, untilEndOfLine);
     }
 
     /// similar to handleScopeDelimiter but specifically for comptime and enter tokens.
