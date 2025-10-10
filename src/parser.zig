@@ -249,6 +249,7 @@ const Context = struct {
         .SharedHash,
         .Identifier,
         .Documentation,
+        .Comma,
     };
 
     const MessageBodyRecoveryPoints: []const TokenKindTag = &.{
@@ -259,6 +260,7 @@ const Context = struct {
         .RawHash,
         .SharedHash,
         .OneOf,
+        .Comma,
     };
 
     fn init(allocator: Allocator, tokens: []const scanner.Token) Context {
@@ -310,7 +312,10 @@ const Context = struct {
                     break :documentation self.captureDocumentationGroup();
                 },
                 .EOF => break,
-                else => self.addError(SyntaxError.unexpectedToken(&token)),
+                else => blk: {
+                    self.addError(SyntaxError.unexpectedToken(&token));
+                    _ = self.skipTokensUntil(EntryKeywords, false) catch |err| break :blk err;
+                },
             }) catch |err| switch (err) {
                 Allocator.Error.OutOfMemory => return Allocator.Error.OutOfMemory,
                 Error.NestingDepthReached => {
@@ -318,6 +323,7 @@ const Context = struct {
                     return;
                 },
                 Error.UnexpectedToken => {
+                    self.it.i -= 1;
                     _ = self.skipTokensUntil(EntryKeywords, false) catch {
                         self.addError(SyntaxError.nestingDepthReached(self.it.currentAssumeSafe().position));
                         return;
@@ -540,10 +546,7 @@ const Context = struct {
         var oneOfGroups = std.ArrayList(ast.OneOf).init(self.allocator);
 
         while (true) {
-            const token = self.it.peek(1) orelse {
-                self.addError(SyntaxError.unexpectedEOF());
-                return Error.UnexpectedToken;
-            };
+            const token = try self.peekNextOrError();
             switch (token.kind) {
                 .Comment => self.consume(),
                 .Documentation => try self.captureDocumentationGroup(),
@@ -552,27 +555,34 @@ const Context = struct {
                     if (v.scopeExited) break;
                 } else |err| if (try self.recoverExitsScope(err, MessageBodyRecoveryPoints, true))
                     break,
-                .Identifier => try fields.append((try self.parseField(null)).data),
+                .Identifier => if (self.parseField(null)) |v| {
+                    try fields.append(v.data);
+                    if (v.scopeExited) break;
+                } else |err| if (try self.recoverExitsScope(err, MessageBodyRecoveryPoints, true))
+                    break,
                 .Embed => {
                     self.consume();
+                    // TODO: Might need to keep the field index just so that the position is clear.
                     try embeddedMessages.append(try self.parseSelector());
                 },
                 .OneOf => {
                     const start = token.position;
                     self.consume();
-                    const oneOfNameToken = try self.consumeRequiredToken(.Identifier, "oneof group name");
-                    const oneOfBlock = (try self.parseOneOfBody(oneOfGroups.items.len, &fields)).data;
-                    try oneOfGroups.append(ast.OneOf{
-                        .name = ast.Identifier{
-                            .value = try self.copyString(oneOfNameToken.literal),
-                            .range = nameToken.range(),
-                        },
-                        .options = oneOfBlock.options,
-                        .range = ast.Range{
-                            .start = start,
-                            .endOffset = self.it.currentAssumeSafe().endOffset(),
-                        },
-                    });
+                    const oneOfNameToken = self.consumeRequiredToken(.Identifier, "oneof group name") catch |err|
+                        if (try self.recoverExitsScope(err, MessageBodyRecoveryPoints, false)) break else continue;
+                    if (self.parseOneOfBody(oneOfGroups.items.len, &fields)) |v| {
+                        try oneOfGroups.append(ast.OneOf{
+                            .name = ast.Identifier{
+                                .value = try self.copyString(oneOfNameToken.literal),
+                                .range = nameToken.range(),
+                            },
+                            .options = v.data.options,
+                            .range = ast.Range{
+                                .start = start,
+                                .endOffset = self.it.currentAssumeSafe().endOffset(),
+                            },
+                        });
+                    } else |err| if (try self.recoverExitsScope(err, MessageBodyRecoveryPoints, false)) break;
                 },
                 .RightCurlyBrace => {
                     self.consume();
@@ -794,7 +804,9 @@ const Context = struct {
                     try values.append(v.data);
                     if (v.scopeExited) break :blk true;
                 } else |err| if (try self.recoverExitsScope(err, RecoveryPoints, true))
-                    break :blk true;
+                    break :blk true
+                else if (!self.nextTokenIsOneOf(RecoveryPoints)) break :blk false;
+                // NB: If next token is not an option token, exit out of option parsing loop.
             }
         };
 
@@ -1092,7 +1104,8 @@ const Context = struct {
                 return .{ .shared = true, .raw = false };
             },
             else => if (needsHashPrefix) {
-                self.addError(SyntaxError.expectToken(&token, "option setting modifier"));
+                self.addError(SyntaxError.expectToken(&token, "option setting modifier or comma"));
+                self.consume();
                 return Error.UnexpectedToken;
             } else return .default(),
         }
@@ -1364,16 +1377,25 @@ const Context = struct {
                     if (expectIdentifier) {
                         tokenCount += 1;
                         contentSize += token.literal.len;
-                    } else try self.addErrorTerminal(SyntaxError.unexpectedToken(&token));
+                    } else {
+                        self.it.i -= 1;
+                        break;
+                    }
                 },
                 .Dot => {
                     if (!expectIdentifier) {
                         tokenCount += 1;
                         contentSize += 1;
                         dotCount += 1;
-                    } else try self.addErrorTerminal(SyntaxError.unexpectedToken(&token));
+                    } else {
+                        self.addError(SyntaxError.unexpectedToken(&token));
+                        return Error.UnexpectedToken;
+                    }
                 },
-                else => break,
+                else => if (expectIdentifier) {
+                    self.addError(SyntaxError.expectToken(&token, "selector segment"));
+                    return Error.UnexpectedToken;
+                } else break,
             }
         }
         if (tokenCount % 2 == 0) {
@@ -1520,6 +1542,7 @@ const Context = struct {
     }
 
     fn addError(self: *Context, err: SyntaxError) void {
+        // TODO: maybe add error skips adding errors if the last error is on the same location.
         if (self.errors.len == self.errors.capacity()) {
             return;
         }
@@ -1615,6 +1638,18 @@ const Context = struct {
         if (self.it.peek(1)) |token| {
             if (std.meta.activeTag(token.kind) == tag) {
                 return true;
+            }
+        }
+        return false;
+    }
+
+    inline fn nextTokenIsOneOf(self: *const Context, comptime tags: []const TokenKindTag) bool {
+        if (self.it.peek(1)) |token| {
+            const nextTokenTag = std.meta.activeTag(token.kind);
+            inline for (tags) |tag| {
+                if (tag == nextTokenTag) {
+                    return true;
+                }
             }
         }
         return false;

@@ -35,9 +35,9 @@ messages:
             selector: "required"
             value: true
 
-1:6[5-6] unexpected token @literal=1
-2:6[12-13] unexpected token @literal=2
-7:21[77-78] unexpected token @literal=.
+1:6[5] expected selector segment @literal=1
+2:6[12] expected selector segment @literal=2
+9:1[80] expected selector segment @literal=pact
 9:22[101-102] unexpected token @literal=.
 ```
 
@@ -601,7 +601,7 @@ enum SomeEnum {
   Unknown = zero #required,
 	"One",
 	Two = 3 bad stuff #optional { some_flag, invalid_option = bad },
-	Three #optional { invalid, option
+	Three #optional { invalid, some_option
 }
 
 interface some_service {}
@@ -645,20 +645,43 @@ enums:
                 shared: false
                 selector: "invalid"
                 value: true
+              - raw: false
+                shared: false
+                selector: "some_option"
+                value: true
 messages:
   - name: "User"
-interfaces:
-  - name: "some_service"
 
 4:13[50] expected enum variant numerical value @literal=zero
 5:2[67-72] unexpected token @literal="One"
-6:10[83] expected option setting modifier @literal=bad
+6:10[83] expected option setting modifier or comma @literal=bad
 6:60[133] expected value @literal=bad
-7:29[168] expected option identifier or key @literal=option
-10:1[178] expected option setting modifier @literal=interface
+10:1[183] expected option setting modifier or comma @literal=interface
+10:11[193-205] unexpected token @literal=some_service
 ```
 
-# enum EOF
+# bad enum no comma
+
+> in case comma is omitted.
+
+```pactum
+enum VariableType {
+    Dynamic = 1,
+    Static = 2
+}
+```
+
+```yaml
+enums:
+  - name: "VariableType"
+    variants:
+      - name: "Dynamic"
+        value: 1
+      - name: "Static"
+        value: 2
+```
+
+# bad enum EOF
 
 ```pactum
 enum UserType {
@@ -674,4 +697,50 @@ enums:
       - name: "B"
 
 0:0[0] unexpected end of file @literal=
+```
+
+# message no comma
+
+```pactum
+message User {
+    name: string
+    age:  i32
+}
+```
+
+```yaml
+messages:
+  - name: "User"
+    fields:
+      - name: "name"
+        type: "string"
+      - name: "age"
+        type: "i32"
+
+3:5[36] expected option setting modifier or comma @literal=age
+```
+
+# message poorly closed array option inside option block
+
+```pactum
+message User {
+    name: string,
+    age:  i32,
+
+    #some_option {
+        value = [1
+    }
+}
+```
+
+```yaml
+messages:
+  - name: "User"
+    fields:
+      - name: "name"
+        type: "string"
+      - name: "age"
+        type: "i32"
+
+3:5[36] expected option setting modifier or comma @literal=age
 ```
