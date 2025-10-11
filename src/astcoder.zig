@@ -207,6 +207,7 @@ fn Context(comptime Writer: type) type {
                         try self.writer.writeAll("- ");
                         self.inArray = true;
                         try self.writeValue(&item);
+                        self.inArray = false;
                     }
                 },
                 .Object => {

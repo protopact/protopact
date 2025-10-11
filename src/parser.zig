@@ -562,8 +562,10 @@ const Context = struct {
                     break,
                 .Embed => {
                     self.consume();
-                    // TODO: Might need to keep the field index just so that the position is clear.
-                    try embeddedMessages.append(try self.parseSelector());
+                    if (self.parseSelector()) |selector| {
+                        // TODO: Might need to keep the field index just so that the position is clear.
+                        try embeddedMessages.append(selector);
+                    } else |err| if (try self.recoverExitsScope(err, MessageBodyRecoveryPoints, false)) break;
                 },
                 .OneOf => {
                     const start = token.position;
@@ -1168,7 +1170,7 @@ const Context = struct {
                             .endOffset = v.data.range.endOffset,
                         },
                     },
-                    v.scopeExited and (self.scopeDelimiterContext() + 1 != currentScope),
+                    v.scopeExited and (self.scopeDelimiterContext() != currentScope),
                 ) else |err| err;
             },
             else => {},
@@ -1201,25 +1203,32 @@ const Context = struct {
         var values = std.ArrayList(ast.OptionAssignmentNode).init(self.allocator);
         _ = try self.consumeRequiredToken(.LeftCurlyBrace, "{");
         const currentScope = self.scopeDelimiterContext();
-        const needsRecovery = blk: {
+        const scopeExited = blk: {
             while (true) {
                 const token = self.it.peek(1) orelse break :blk false;
-                if (token.kind == .RightCurlyBrace) {
-                    self.consume();
-                    self.popScopeDelimiter(.CurlyBrace);
-                    break :blk false;
+                switch (token.kind) {
+                    .RightCurlyBrace => {
+                        self.consume();
+                        self.popScopeDelimiter(.CurlyBrace);
+                        break :blk false;
+                    },
+                    .Comment => {
+                        self.consume();
+                        continue;
+                    },
+                    else => if (self.parseOption(true, null)) |v| {
+                        try values.append(v.data);
+                        if (v.scopeExited) break :blk true;
+                    } else |err| {
+                        if (try self.recoverExitsScope(err, OptionBlockRecoveryPoints, true))
+                            break :blk true;
+                    },
                 }
-                if (self.parseOption(true, null)) |v| {
-                    try values.append(v.data);
-                    if (v.scopeExited) break :blk true;
-                } else |err| if (try self.recoverExitsScope(err, OptionBlockRecoveryPoints, true))
-                    break :blk true;
 
                 _ = self.consumeOptionalTokenBool(.Comma);
             }
         };
-
-        return .initValue(values.items, needsRecovery and (self.scopeDelimiterContext() + 1 != currentScope));
+        return .initValue(values.items, scopeExited and (self.scopeDelimiterContext() + 1 != currentScope));
     }
 
     /// parses an array of ranged values.
@@ -1242,7 +1251,7 @@ const Context = struct {
         var end: usize = undefined;
         const currentScope = self.scopeDelimiterContext();
 
-        const needsRecovery = blk: {
+        const scopeExited = blk: {
             while (true) {
                 const next = self.it.peek(1) orelse break :blk false;
                 if (next.kind == .RightBracket) {
@@ -1269,7 +1278,7 @@ const Context = struct {
         return .initValue(.{
             .value = .{ .Array = values.items },
             .range = .{ .start = start, .endOffset = end },
-        }, needsRecovery and (self.scopeDelimiterContext() + 1 != currentScope));
+        }, scopeExited and (self.scopeDelimiterContext() + 1 != currentScope));
     }
 
     /// parses a map of ranged values.
@@ -1283,7 +1292,7 @@ const Context = struct {
         var end: usize = undefined;
         const currentScope = self.scopeDelimiterContext();
 
-        const needsRecovery = blk: {
+        const scopeExited = blk: {
             mainLoop: while (true) {
                 const next = self.it.next() orelse break :blk true;
                 switch (next.kind) {
@@ -1329,11 +1338,11 @@ const Context = struct {
         return .initValue(.{
             .value = .{ .Object = values.items },
             .range = .{ .start = start, .endOffset = end },
-        }, needsRecovery and (self.scopeDelimiterContext() + 1 != currentScope));
+        }, scopeExited and (self.scopeDelimiterContext() + 1 != currentScope));
     }
 
     fn parseValue(self: *Context) Error!ParseResult(ast.RangedValue) {
-        const token = self.it.next() orelse return Error.UnexpectedToken;
+        const token = self.it.next() orelse return Error.UnexpectedEOF;
         return switch (token.kind) {
             .String => .initOk(.{
                 .range = token.range(),

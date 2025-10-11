@@ -58,7 +58,7 @@ pact meshapi.gateway.v1.
 ```
 
 ```yaml
-1:24[23-24] unexpected token @literal=.
+0:0[0] unexpected end of file @literal=
 ```
 
 # extra identifier

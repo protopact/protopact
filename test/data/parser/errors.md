@@ -666,7 +666,7 @@ messages:
 
 ```pactum
 enum VariableType {
-    Dynamic = 1,
+    Dynamic = 1
     Static = 2
 }
 ```
@@ -679,6 +679,8 @@ enums:
         value: 1
       - name: "Static"
         value: 2
+
+3:5[40] expected option setting modifier or comma @literal=Static
 ```
 
 # bad enum EOF
@@ -736,11 +738,21 @@ message User {
 ```yaml
 messages:
   - name: "User"
+    options:
+      - raw: false
+        shared: false
+        selector: "some_option"
+        block:
+          - raw: false
+            shared: false
+            selector: "value"
+            value:
+                - 1
     fields:
       - name: "name"
         type: "string"
       - name: "age"
         type: "i32"
 
-3:5[36] expected option setting modifier or comma @literal=age
+7:5[91] expected value @literal=}
 ```
