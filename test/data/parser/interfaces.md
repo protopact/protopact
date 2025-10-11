@@ -48,13 +48,13 @@ interfaces:
               data: "tag two"
     funcs:
       - name: "FuncWithoutParamWithSemicolon"
-        range: "4:2[66-98]"
+        range: "4:2[66-97]"
         tag: null
         input: null
         output: null
         options:
       - name: "FuncWithoutParamWithOptionsSemicolon"
-        range: "5:2[100-156]"
+        range: "5:2[100-155]"
         tag: null
         input: null
         output: null
@@ -75,7 +75,7 @@ interfaces:
         output: null
         options:
       - name: "FuncWithoutParamWithOptionsBlockAndSemicolon"
-        range: "7:2[197-247]"
+        range: "7:2[197-246]"
         tag: null
         input: null
         output: null
@@ -101,7 +101,7 @@ interfaces:
     options:
     funcs:
       - name: "FuncWithInput"
-        range: "2:2[25-60]"
+        range: "2:2[25-59]"
         tag: 1
         input:
           name:
@@ -111,7 +111,7 @@ interfaces:
         output: null
         options:
       - name: "FuncWithStreamingInputEmptyOutput"
-        range: "3:2[62-147]"
+        range: "3:2[62-146]"
         tag: 2
         input:
           name:
@@ -130,7 +130,7 @@ interfaces:
               range: "3:72[132-146]"
               data: true
       - name: "FuncWithOutputArgs"
-        range: "4:2[149-219]"
+        range: "4:2[149-218]"
         tag: 3
         input:
           name:

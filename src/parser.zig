@@ -527,7 +527,7 @@ const Context = struct {
             }
         }
 
-        return if (self.parseItemOptions()) |v| .initValue(
+        return if (self.parseItemOptions(.Comma)) |v| .initValue(
             try self.buildEnumVariant(nameToken, value, documentation, v.data),
             v.scopeExited,
         ) else |err| .initValue(
@@ -676,7 +676,7 @@ const Context = struct {
             }
         }
 
-        return if (self.parseItemOptions()) |v| .initValue(
+        return if (self.parseItemOptions(.Comma)) |v| .initValue(
             try self.buildField(nameToken, documentation, v.data, tag, dataType.data, oneOfGroupIndex),
             v.scopeExited,
         ) else |err| .initValue(
@@ -798,8 +798,11 @@ const Context = struct {
         );
     }
 
-    fn parseItemOptions(self: *Context) Error!ParseResult([]ast.OptionAssignmentNode) {
-        const RecoveryPoints: []const TokenKindTag = &.{ .Comma, .RawHash, .Hash, .SharedHash };
+    fn parseItemOptions(
+        self: *Context,
+        comptime terminationToken: TokenKindTag,
+    ) Error!ParseResult([]ast.OptionAssignmentNode) {
+        const RecoveryPoints: []const TokenKindTag = &.{ terminationToken, .RawHash, .Hash, .SharedHash };
 
         if (self.nextTokenIs(.LeftCurlyBrace)) {
             return self.parseOptionBlock();
@@ -809,7 +812,7 @@ const Context = struct {
         const scopeExited = blk: {
             while (true) {
                 const token = self.it.peek(1) orelse break :blk false;
-                if (token.kind == .RightCurlyBrace or token.kind == .Comma) {
+                if (token.kind == .RightCurlyBrace or token.kind == terminationToken) {
                     break :blk false;
                 }
                 if (self.parseOption(false, null)) |v| {
@@ -913,13 +916,18 @@ const Context = struct {
             const token = try self.peekNextOrError();
             switch (token.kind) {
                 .Comment => self.consume(),
+                .Semicolon => self.consume(),
                 .Hash, .SharedHash, .RawHash => if (self.parseOption(false, null)) |v| {
                     try options.append(v.data);
                     if (v.scopeExited) break;
                 } else |err| if (try self.recoverExitsScope(err, InterfaceBodyRecoveryPoints, true))
                     break,
                 .Documentation => try self.captureDocumentationGroup(),
-                .Identifier => try funcs.append(try self.parseFunc()),
+                .Identifier => if (self.parseFunc()) |v| {
+                    try funcs.append(v.data);
+                    if (v.scopeExited) break;
+                } else |err| if (try self.recoverExitsScope(err, &.{.Semicolon}, true))
+                    break,
                 .RightCurlyBrace => {
                     self.consume();
                     self.popScopeDelimiter(.CurlyBrace);
@@ -949,7 +957,33 @@ const Context = struct {
         });
     }
 
-    fn parseFunc(self: *Context) Error!ast.Func {
+    inline fn buildFunc(
+        self: *Context,
+        nameToken: scanner.Token,
+        options: []ast.OptionAssignmentNode,
+        input: ?ast.FuncArg,
+        output: ?ast.FuncArg,
+        documentation: ?ast.Documentation,
+        tag: ?u32,
+    ) Allocator.Error!ast.Func {
+        return ast.Func{
+            .name = ast.Identifier{
+                .value = try self.copyString(nameToken.literal),
+                .range = nameToken.range(),
+            },
+            .options = options,
+            .input = input,
+            .output = output,
+            .documentation = documentation,
+            .tag = tag,
+            .range = .{
+                .start = nameToken.position,
+                .endOffset = self.it.currentAssumeSafe().endOffset(),
+            },
+        };
+    }
+
+    fn parseFunc(self: *Context) Error!ParseResult(ast.Func) {
         const documentation = try self.consumeStagedDocumentationFor(self.it.currentAssumeSafe().position);
         const nameToken = try self.consumeRequiredToken(.Identifier, "func name");
         _ = try self.consumeRequiredToken(.LeftParan, "(");
@@ -986,45 +1020,13 @@ const Context = struct {
             } else self.addError(SyntaxError.funcTagNumericalError(&tagToken));
         }
 
-        var options: []ast.OptionAssignmentNode = undefined;
-        if (self.nextTokenIs(.LeftCurlyBrace)) {
-            // 1. Either a block with an optional semicolon.
-            const optionBlock = try self.parseOptionBlock();
-            options = optionBlock.data;
-            _ = self.consumeOptionalTokenBool(.Semicolon);
-        } else {
-            // 2. or a series of option statement followed by a semicolon.
-            var list = std.ArrayList(ast.OptionAssignmentNode).init(self.allocator);
-            while (true) {
-                // TODO: probably need to handle this a bit more gracefully.
-                const nextToken = self.it.peek(1) orelse {
-                    self.addError(SyntaxError.unexpectedEOF());
-                    return Error.UnexpectedToken;
-                };
-                if (nextToken.kind == .Semicolon) {
-                    self.consume();
-                    break;
-                }
-                try list.append((try self.parseOption(false, null)).data);
-            }
-            options = list.items;
-        }
-
-        return ast.Func{
-            .name = ast.Identifier{
-                .value = try self.copyString(nameToken.literal),
-                .range = nameToken.range(),
-            },
-            .options = options,
-            .input = input,
-            .output = output,
-            .documentation = documentation,
-            .tag = tag,
-            .range = .{
-                .start = nameToken.position,
-                .endOffset = self.it.currentAssumeSafe().endOffset(),
-            },
-        };
+        return if (self.parseItemOptions(.Semicolon)) |v| .initValue(
+            try self.buildFunc(nameToken, v.data, input, output, documentation, tag),
+            v.scopeExited,
+        ) else |err| .initValue(
+            try self.buildFunc(nameToken, &.{}, input, output, documentation, tag),
+            try self.recoverExitsScope(err, InterfaceBodyRecoveryPoints, true),
+        );
     }
 
     fn parseFuncArg(self: *Context) Error!ast.FuncArg {
