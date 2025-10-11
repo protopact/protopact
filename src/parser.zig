@@ -1304,24 +1304,19 @@ const Context = struct {
         try self.pushScopeDelimiter(.CurlyBrace);
         var values = std.ArrayList(ast.Entry).init(self.allocator);
         const start = self.it.currentAssumeSafe().position;
-        var end: usize = undefined;
         const currentScope = self.scopeDelimiterContext();
 
         const scopeExited = blk: {
             mainLoop: while (true) {
                 const next = self.it.next() orelse break :blk true;
                 switch (next.kind) {
-                    .RightCurlyBrace => {
-                        end = next.endOffset();
-                        break :blk false;
-                    },
+                    .RightCurlyBrace => break :blk false,
                     .Comma => self.consume(),
                     .String => {
                         _ = self.consumeRequiredToken(.Equal, "=") catch |err| {
-                            if (try self.recoverExitsScope(err, ObjectRecoveryPoints, false)) {
-                                end = self.it.currentAssumeSafe().endOffset();
+                            if (try self.recoverExitsScope(err, ObjectRecoveryPoints, false))
                                 break :blk true;
-                            }
+
                             _ = self.consumeOptionalTokenBool(.Comma);
                             continue :mainLoop;
                         };
@@ -1330,17 +1325,10 @@ const Context = struct {
                                 .key = try self.copyString(next.kind.String),
                                 .value = v.data,
                             });
-                            if (v.scopeExited) {
-                                // TODO: can this be simplfieid to just currentAssumeSafe at the end?
-                                // what if we see EOF, would that still work?
-                                // add tests for it.
-                                end = self.it.currentAssumeSafe().endOffset();
-                                break :blk true;
-                            }
-                        } else |err| if (try self.recoverExitsScope(err, ObjectRecoveryPoints, false)) {
-                            end = self.it.currentAssumeSafe().endOffset();
+                            if (v.scopeExited) break :blk true;
+                        } else |err| if (try self.recoverExitsScope(err, ObjectRecoveryPoints, false))
                             break :blk true;
-                        }
+
                         _ = self.consumeOptionalTokenBool(.Comma);
                     },
                     else => {
@@ -1353,7 +1341,7 @@ const Context = struct {
 
         return .initValue(.{
             .value = .{ .Object = values.items },
-            .range = .{ .start = start, .endOffset = end },
+            .range = .{ .start = start, .endOffset = self.it.currentAssumeSafe().endOffset() },
         }, scopeExited and (self.scopeDelimiterContext() + 1 != currentScope));
     }
 
