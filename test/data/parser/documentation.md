@@ -171,7 +171,7 @@ enum Color {
 	// ignore comment.
 	/// We all know red.
 	Red,
-	/** Not sure about this one though. */
+	/** Not sure about this one though.*/
 	Green,
 	/// Documentation for blue.
 	// even though there are comments here, the documentation
@@ -193,7 +193,7 @@ enums:
           We all know red.
       - name: "Green"
         documentation: |
-          Not sure about this one though. 
+          Not sure about this one though.
       - name: "Blue"
         documentation: |
           Documentation for blue.
@@ -244,7 +244,7 @@ constants:
     documentation: |
       Documentation for the last one
     value:
-        key: "tags"
-        value:
-            - 1.2
+      key: "tags"
+      value:
+        - 1.2
 ```

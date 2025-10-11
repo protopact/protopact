@@ -200,8 +200,8 @@ fn Context(comptime Writer: type) type {
                     self.incrIndent();
                     defer self.decrIndent();
                     for (value.*.value.Array) |item| {
-                        self.incrIndent();
-                        defer self.decrIndent();
+                        if (self.includeRange) self.incrIndent();
+                        defer if (self.includeRange) self.decrIndent();
                         try self.writeNewLine();
                         try self.writer.writeByteNTimes(' ', self.indentation);
                         try self.writer.writeAll("- ");
@@ -211,8 +211,8 @@ fn Context(comptime Writer: type) type {
                     }
                 },
                 .Object => {
-                    self.incrIndent();
-                    defer self.decrIndent();
+                    if (self.includeRange) self.incrIndent();
+                    defer if (self.includeRange) self.decrIndent();
                     for (value.*.value.Object) |item| {
                         self.incrIndent();
                         defer self.decrIndent();

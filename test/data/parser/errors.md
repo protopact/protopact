@@ -226,16 +226,16 @@ pact: "meshapi.gateway"
 constants:
   - name: "b"
     value:
-        - 1
-        - 2
+      - 1
+      - 2
   - name: "a"
     value:
-        key: "other_key"
-        value:
-            - 1
-            - 2
-            - "some_key"
-            - false
+      key: "other_key"
+      value:
+        - 1
+        - 2
+        - "some_key"
+        - false
   - name: "b"
     value: 2.3
   - name: "c"
@@ -277,18 +277,18 @@ pact: "meshapi.gateway"
 constants:
   - name: "b"
     value:
-        - 1
-        - 2
+      - 1
+      - 2
   - name: "a"
     value:
-        key: "other_key"
+      key: "other_key"
+      value:
+        key: "nested_scope"
         value:
-            key: "nested_scope"
-            value:
-                - 1
-                - 2
-        key: "some_key"
-        value: false
+          - 1
+          - 2
+      key: "some_key"
+      value: false
   - name: "b"
     value: 2.3
   - name: "c"
@@ -321,10 +321,10 @@ pact: "meshapi.gateway"
 constants:
   - name: "SomeValue"
     value:
-        key: "array"
-        value:
-            - 1
-            - 2
+      key: "array"
+      value:
+        - 1
+        - 2
 messages:
   - name: "User"
 interfaces:
@@ -350,10 +350,10 @@ pact: "meshapi.gateway"
 constants:
   - name: "SomeValue"
     value:
-        key: "array"
-        value:
-            - 1
-            - 2
+      key: "array"
+      value:
+        - 1
+        - 2
 interfaces:
   - name: "some_service"
 
@@ -377,11 +377,11 @@ pact: "meshapi.gateway"
 constants:
   - name: "SomeValue"
     value:
-        key: "array"
-        value:
-            - 1
-            - 2
-            - false
+      key: "array"
+      value:
+        - 1
+        - 2
+        - false
 interfaces:
   - name: "some_service"
 
@@ -405,12 +405,12 @@ pact: "meshapi.gateway"
 constants:
   - name: "SomeValue"
     value:
-        key: "array"
-        value:
-            - 1
-            - 2
-            - 3
-            - false
+      key: "array"
+      value:
+        - 1
+        - 2
+        - 3
+        - false
 interfaces:
   - name: "some_service"
 
@@ -435,10 +435,10 @@ pact: "meshapi.gateway"
 constants:
   - name: "SomeValue"
     value:
-        key: "array"
-        value:
-            - 1
-            - 2
+      key: "array"
+      value:
+        - 1
+        - 2
     options:
       - raw: false
         shared: false
@@ -477,8 +477,8 @@ constants:
     value: "1"
   - name: "B"
     value:
-        key: "key"
-        value: "value"
+      key: "key"
+      value: "value"
 
 0:0[0] unexpected end of file @literal=
 ```
@@ -494,8 +494,8 @@ const B = {
 constants:
   - name: "B"
     value:
-        key: "key"
-        value: "value"
+      key: "key"
+      value: "value"
 
 0:0[0] unexpected end of file @literal=
 ```
@@ -747,7 +747,7 @@ messages:
             shared: false
             selector: "value"
             value:
-                - 1
+              - 1
     fields:
       - name: "name"
         type: "string"
@@ -866,4 +866,28 @@ messages:
 6:5[106] expected > @literal=}
 7:1[108] expected option setting modifier or comma @literal=)
 0:0[0] unexpected end of file @literal=
+```
+
+# array values
+
+```pactum
+message A {
+    #a.b = {
+        "data" = [1,,,,,2]
+    }
+}
+```
+
+```yaml
+messages:
+  - name: "A"
+    options:
+      - raw: false
+        shared: false
+        selector: "a.b"
+        value:
+          key: "data"
+          value:
+            - 1
+            - 2
 ```

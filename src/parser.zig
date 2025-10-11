@@ -1075,10 +1075,11 @@ const Context = struct {
     fn processOption(self: *Context) Error!void {
         const modifiers = try self.parseOptionModifiers(true);
 
+        // NB: there is no need to check whether scope is exited or not because regardless
+        // it returns to the root scope. If there is partial data, it should get added.
         if (self.nextTokenIs(.LeftCurlyBrace)) {
             // block mode.
             const start = self.currentPosition();
-            // TODO: don't I have to recover from this here? what happens if at this point, we return UnexpectedToken?
             const blockOptions = try self.parseOptionBlock();
             const rootOption = ast.OptionAssignmentNode{
                 .shared = modifiers.shared,
@@ -1089,7 +1090,6 @@ const Context = struct {
             };
             try self.options.append(rootOption);
         } else {
-            // TODO: I probably have to handle the scope exited error, no?
             const option = try self.parseOption(false, modifiers);
             try self.options.append(option.data);
         }
@@ -1264,36 +1264,35 @@ const Context = struct {
         try self.pushScopeDelimiter(.Bracket);
         var values = std.ArrayList(ast.RangedValue).init(self.allocator);
         const start = self.it.currentAssumeSafe().position;
-        var end: usize = undefined;
         const currentScope = self.scopeDelimiterContext();
 
         const scopeExited = blk: {
             while (true) {
                 const next = self.it.peek(1) orelse break :blk false;
-                if (next.kind == .RightBracket) {
-                    self.popScopeDelimiter(.Bracket);
-                    self.consume();
-                    // TODO: can this be simplified to just currentAssumeSafe()?
-                    end = next.endOffset();
-                    break :blk false;
-                }
-                if (self.parseValue()) |v| {
-                    try values.append(v.data);
-                    if (v.scopeExited) {
-                        end = self.it.currentAssumeSafe().endOffset();
+                switch (next.kind) {
+                    .RightBracket => {
+                        self.popScopeDelimiter(.Bracket);
+                        self.consume();
+                        break :blk false;
+                    },
+                    .Comma => self.consume(),
+                    else => if (self.parseValue()) |v| {
+                        try values.append(v.data);
+                        if (v.scopeExited) {
+                            break :blk true;
+                        }
+                    } else |err| if (try self.recoverExitsScope(err, ArrayRecoveryPoints, false)) {
                         break :blk true;
-                    }
-                } else |err| if (try self.recoverExitsScope(err, ArrayRecoveryPoints, false)) {
-                    end = self.it.currentAssumeSafe().endOffset();
-                    break :blk true;
+                    },
                 }
+
                 _ = self.consumeOptionalTokenBool(.Comma);
             }
         };
 
         return .initValue(.{
             .value = .{ .Array = values.items },
-            .range = .{ .start = start, .endOffset = end },
+            .range = .{ .start = start, .endOffset = self.it.currentAssumeSafe().endOffset() },
         }, scopeExited and (self.scopeDelimiterContext() + 1 != currentScope));
     }
 
@@ -1316,6 +1315,7 @@ const Context = struct {
                         end = next.endOffset();
                         break :blk false;
                     },
+                    .Comma => self.consume(),
                     .String => {
                         _ = self.consumeRequiredToken(.Equal, "=") catch |err| {
                             if (try self.recoverExitsScope(err, ObjectRecoveryPoints, false)) {
