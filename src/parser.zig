@@ -263,6 +263,15 @@ const Context = struct {
         .Comma,
     };
 
+    const InterfaceBodyRecoveryPoints: []const TokenKindTag = &.{
+        .Identifier,
+        .Documentation,
+        .Hash,
+        .RawHash,
+        .SharedHash,
+        .Comma,
+    };
+
     fn init(allocator: Allocator, tokens: []const scanner.Token) Context {
         return .{
             .allocator = allocator,
@@ -459,6 +468,7 @@ const Context = struct {
                     self.popScopeDelimiter(.CurlyBrace);
                     break;
                 },
+                .Comma => self.consume(),
                 else => {
                     self.addError(SyntaxError.unexpectedToken(&token));
                     if (try self.skipTokensUntil(EnumBodyRecoveryPoints, false))
@@ -558,7 +568,7 @@ const Context = struct {
                 .Identifier => if (self.parseField(null)) |v| {
                     try fields.append(v.data);
                     if (v.scopeExited) break;
-                } else |err| if (try self.recoverExitsScope(err, MessageBodyRecoveryPoints, true))
+                } else |err| if (try self.recoverExitsScope(err, &.{.Comma}, true))
                     break,
                 .Embed => {
                     self.consume();
@@ -591,6 +601,7 @@ const Context = struct {
                     self.popScopeDelimiter(.CurlyBrace);
                     break;
                 },
+                .Comma => self.consume(),
                 else => {
                     self.addError(SyntaxError.unexpectedToken(&token));
                     if (try self.skipTokensUntil(MessageBodyRecoveryPoints, false)) {
@@ -755,7 +766,7 @@ const Context = struct {
                         // append the field
                         try fields.append(v.data);
                         if (v.scopeExited) break :blk true;
-                    } else |err| if (try self.recoverExitsScope(err, OneOfBodyRecoveryPoints, true))
+                    } else |err| if (try self.recoverExitsScope(err, &.{.Comma}, true))
                         break :blk true,
                     .Hash, .RawHash, .SharedHash => if (self.parseOption(false, null)) |v| {
                         try options.append(v.data);
@@ -767,9 +778,8 @@ const Context = struct {
                         self.popScopeDelimiter(.CurlyBrace);
                         break :blk false;
                     },
+                    .Comma => self.consume(),
                     else => {
-                        // TODO: this is likely incorrect because this incorrect token could very easily
-                        // have been a } to forcefully exit the scope.
                         self.addError(SyntaxError.unexpectedToken(&nextToken));
                         if (try self.skipTokensUntil(OneOfBodyRecoveryPoints, true))
                             break :blk true;
@@ -888,34 +898,38 @@ const Context = struct {
     }
 
     fn processInterfaceBody(self: *Context) Error!void {
+        const InterfaceRecoveryPoints: []const TokenKindTag = &.{ .Interface, .Documentation };
         const documentation = try self.parseDocumentationGroupForCurrentPosition();
-        const nameToken = try self.consumeRequiredToken(.Identifier, "interface name");
+        const nameToken = self.consumeRequiredToken(.Identifier, "interface name") catch |err|
+            return self.recover(err, InterfaceRecoveryPoints, true);
 
-        _ = try self.consumeRequiredToken(.LeftCurlyBrace, "");
+        _ = self.consumeRequiredToken(.LeftCurlyBrace, "") catch |err|
+            return self.recover(err, InterfaceRecoveryPoints, false);
+
         var funcs = std.ArrayList(ast.Func).init(self.allocator);
         var options = std.ArrayList(ast.OptionAssignmentNode).init(self.allocator);
 
         while (true) {
-            const nextToken = self.it.peek(1) orelse {
-                self.addError(SyntaxError.unexpectedEOF());
-                return Error.UnexpectedToken;
-            };
-
-            switch (nextToken.kind) {
+            const token = try self.peekNextOrError();
+            switch (token.kind) {
                 .Comment => self.consume(),
-                .Hash, .SharedHash, .RawHash => {
-                    try options.append((try self.parseOption(false, null)).data);
-                    _ = self.consumeOptionalTokenBool(.Comma);
-                },
+                .Hash, .SharedHash, .RawHash => if (self.parseOption(false, null)) |v| {
+                    try options.append(v.data);
+                    if (v.scopeExited) break;
+                } else |err| if (try self.recoverExitsScope(err, InterfaceBodyRecoveryPoints, true))
+                    break,
                 .Documentation => try self.captureDocumentationGroup(),
                 .Identifier => try funcs.append(try self.parseFunc()),
                 .RightCurlyBrace => {
                     self.consume();
+                    self.popScopeDelimiter(.CurlyBrace);
                     break;
                 },
                 else => {
-                    self.addError(SyntaxError.unexpectedToken(&nextToken));
-                    return Error.UnexpectedToken;
+                    self.addError(SyntaxError.unexpectedToken(&token));
+                    if (try self.skipTokensUntil(InterfaceBodyRecoveryPoints, false)) {
+                        break;
+                    }
                 },
             }
         }

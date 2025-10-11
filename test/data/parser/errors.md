@@ -756,3 +756,114 @@ messages:
 
 7:5[91] expected value @literal=}
 ```
+
+# message bad oneof block
+
+> [!NOTE] unnamed oneof block and bad scope for the second oneof block and multiple commas
+
+```pactum
+message (
+	UpdateUserRequest {
+        id: string,
+        oneof {
+            some_field: i32,
+            #ignore
+        },
+        oneof user_change {
+            name: string
+            age: string,
+            location: list<myapi.Location #openapi.summary="The new location for the user"
+            new_field: i32,,,,
+
+            #required
+        }
+	}
+)
+```
+
+```yaml
+messages:
+  - name: "UpdateUserRequest"
+    oneof_groups:
+      - name: "user_change"
+        options:
+          - raw: false
+            shared: false
+            selector: "required"
+            value: true
+    fields:
+      - name: "id"
+        type: "string"
+      - name: "name"
+        type: "string"
+        oneof_group_index: 0
+      - name: "age"
+        type: "string"
+        oneof_group_index: 0
+      - name: "new_field"
+        type: "i32"
+        oneof_group_index: 0
+
+4:15[65] expected oneof group name @literal={
+10:13[192] expected option setting modifier or comma @literal=age
+11:43[247] expected > @literal=#
+```
+
+# comma in message body
+
+```pactum
+message Name {
+    ,,,,,
+    bad_type: "some type" #optional,
+    age: i32
+    another_bad_field_with_no_comma: 1.2 #some_option
+    field: i32,
+
+    #required
+}
+```
+
+```yaml
+messages:
+  - name: "Name"
+    options:
+      - raw: false
+        shared: false
+        selector: "required"
+        value: true
+    fields:
+      - name: "age"
+        type: "i32"
+      - name: "field"
+        type: "i32"
+
+3:15[39] expected field type @literal="some type"
+5:5[79] expected option setting modifier or comma @literal=another_bad_field_with_no_comma
+5:38[112] expected field type @literal=1.2
+```
+
+# message with bad closure of oneof block
+
+```pactum
+message (
+    User {
+        name: string,
+        some_field: oneof {
+            items: list<string
+    }
+)
+```
+
+```yaml
+messages:
+  - name: "User"
+    fields:
+      - name: "name"
+        type: "string"
+      - name: "some_field"
+        type: "oneof"
+
+6:5[106] expected > @literal=}
+7:1[108] expected option setting modifier or comma @literal=)
+0:0[0] unexpected end of file @literal=
+```
