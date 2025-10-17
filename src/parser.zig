@@ -2,6 +2,9 @@ const std = @import("std");
 const scanner = @import("scanner.zig");
 const ast = @import("ast.zig");
 
+const StackArray = @import("stack_array.zig").StackArray;
+const StackFallbackArray = @import("stack_array.zig").StackFallbackArray;
+
 const Allocator = std.mem.Allocator;
 
 const Error = error{ UnexpectedToken, UnexpectedEOF, NestingDepthReached } || Allocator.Error;
@@ -199,8 +202,8 @@ const Context = struct {
         Bracket,
         Paran,
     };
-    const ErrorList = std.BoundedArray(SyntaxError, 10);
-    const ScopeDelimiterList = std.BoundedArray(ScopeDelimiter, 10);
+    const ErrorList = StackArray(SyntaxError, 10);
+    const ScopeDelimiterList = StackArray(ScopeDelimiter, 10);
 
     const TokenKindTag = std.meta.Tag(scanner.TokenKind);
 
@@ -276,17 +279,17 @@ const Context = struct {
         return .{
             .allocator = allocator,
             .it = TokenIterator.init(tokens),
-            .errors = ErrorList.init(0) catch unreachable,
-            .scopeDelimiters = ScopeDelimiterList.init(0) catch unreachable,
+            .errors = ErrorList.init(),
+            .scopeDelimiters = ScopeDelimiterList.init(),
             .stagedDocumentation = null,
             .pact = null,
-            .imports = std.ArrayList(ast.Import).init(allocator),
-            .options = std.ArrayList(ast.OptionAssignmentNode).init(allocator),
-            .constants = std.ArrayList(ast.Constant).init(allocator),
-            .enums = std.ArrayList(ast.Enum).init(allocator),
-            .messages = std.ArrayList(ast.Message).init(allocator),
-            .optionDefinitions = std.ArrayList(ast.OptionDefinition).init(allocator),
-            .interfaces = std.ArrayList(ast.Interface).init(allocator),
+            .imports = std.ArrayList(ast.Import).initCapacity(allocator, 0) catch unreachable,
+            .options = std.ArrayList(ast.OptionAssignmentNode).initCapacity(allocator, 0) catch unreachable,
+            .constants = std.ArrayList(ast.Constant).initCapacity(allocator, 0) catch unreachable,
+            .enums = std.ArrayList(ast.Enum).initCapacity(allocator, 0) catch unreachable,
+            .messages = std.ArrayList(ast.Message).initCapacity(allocator, 0) catch unreachable,
+            .optionDefinitions = std.ArrayList(ast.OptionDefinition).initCapacity(allocator, 0) catch unreachable,
+            .interfaces = std.ArrayList(ast.Interface).initCapacity(allocator, 0) catch unreachable,
             .documentation = null,
         };
     }
@@ -368,7 +371,7 @@ const Context = struct {
         const pathToken = self.consumeRequiredToken(.String, "path string") catch |err| {
             return self.recover(err, &.{ .String, .Underscore, .Identifier }, true);
         };
-        try self.imports.append(.{
+        try self.imports.append(self.allocator, .{
             .implicit = implicit,
             .alias = alias,
             .path = try self.copyString(pathToken.kind.String),
@@ -388,7 +391,7 @@ const Context = struct {
         start: ast.Position,
         options: []ast.OptionAssignmentNode,
     ) Allocator.Error!void {
-        try self.constants.append(ast.Constant{
+        try self.constants.append(self.allocator, ast.Constant{
             .name = try self.copyString(name),
             .value = value,
             .documentation = documentation,
@@ -446,19 +449,19 @@ const Context = struct {
             return self.recover(err, EnumEntryRecoveryPoints, false);
         };
 
-        var options = std.ArrayList(ast.OptionAssignmentNode).init(self.allocator);
-        var variants = std.ArrayList(ast.EnumVariant).init(self.allocator);
+        var options = std.ArrayList(ast.OptionAssignmentNode).initCapacity(self.allocator, 0) catch unreachable;
+        var variants = std.ArrayList(ast.EnumVariant).initCapacity(self.allocator, 0) catch unreachable;
         while (true) {
             const token = try self.peekNextOrError();
             switch (token.kind) {
                 .Comment => self.consume(),
                 .Hash, .RawHash, .SharedHash => if (self.parseOption(false, null)) |v| {
-                    try options.append(v.data);
+                    try options.append(self.allocator, v.data);
                     if (v.scopeExited) break;
                 } else |err| if (try self.recoverExitsScope(err, EnumBodyRecoveryPoints, true))
                     break,
                 .Identifier => if (self.parseEnumVariant()) |v| {
-                    try variants.append(v.data);
+                    try variants.append(self.allocator, v.data);
                     if (v.scopeExited) break;
                 } else |err| if (try self.recoverExitsScope(err, EnumBodyRecoveryPoints, true))
                     break,
@@ -478,7 +481,7 @@ const Context = struct {
             _ = self.consumeOptionalTokenBool(.Comma);
         }
 
-        try self.enums.append(ast.Enum{
+        try self.enums.append(self.allocator, ast.Enum{
             .name = ast.Identifier{ .value = try self.copyString(nameToken.literal), .range = nameToken.range() },
             .variants = variants.items,
             .documentation = documentation,
@@ -550,10 +553,10 @@ const Context = struct {
             return self.recover(err, MessageEntryRecoveryPoints, false);
         };
 
-        var options = std.ArrayList(ast.OptionAssignmentNode).init(self.allocator);
-        var fields = std.ArrayList(ast.Field).init(self.allocator);
-        var embeddedMessages = std.ArrayList(ast.Selector).init(self.allocator);
-        var oneOfGroups = std.ArrayList(ast.OneOf).init(self.allocator);
+        var options = std.ArrayList(ast.OptionAssignmentNode).initCapacity(self.allocator, 0) catch unreachable;
+        var fields = std.ArrayList(ast.Field).initCapacity(self.allocator, 0) catch unreachable;
+        var embeddedMessages = std.ArrayList(ast.Selector).initCapacity(self.allocator, 0) catch unreachable;
+        var oneOfGroups = std.ArrayList(ast.OneOf).initCapacity(self.allocator, 0) catch unreachable;
 
         while (true) {
             const token = try self.peekNextOrError();
@@ -561,12 +564,12 @@ const Context = struct {
                 .Comment => self.consume(),
                 .Documentation => try self.captureDocumentationGroup(),
                 .Hash, .RawHash, .SharedHash => if (self.parseOption(false, null)) |v| {
-                    try options.append(v.data);
+                    try options.append(self.allocator, v.data);
                     if (v.scopeExited) break;
                 } else |err| if (try self.recoverExitsScope(err, MessageBodyRecoveryPoints, true))
                     break,
                 .Identifier => if (self.parseField(null)) |v| {
-                    try fields.append(v.data);
+                    try fields.append(self.allocator, v.data);
                     if (v.scopeExited) break;
                 } else |err| if (try self.recoverExitsScope(err, &.{.Comma}, true))
                     break,
@@ -574,7 +577,7 @@ const Context = struct {
                     self.consume();
                     if (self.parseSelector()) |selector| {
                         // TODO: Might need to keep the field index just so that the position is clear.
-                        try embeddedMessages.append(selector);
+                        try embeddedMessages.append(self.allocator, selector);
                     } else |err| if (try self.recoverExitsScope(err, MessageBodyRecoveryPoints, false)) break;
                 },
                 .OneOf => {
@@ -583,7 +586,7 @@ const Context = struct {
                     const oneOfNameToken = self.consumeRequiredToken(.Identifier, "oneof group name") catch |err|
                         if (try self.recoverExitsScope(err, MessageBodyRecoveryPoints, false)) break else continue;
                     if (self.parseOneOfBody(oneOfGroups.items.len, &fields)) |v| {
-                        try oneOfGroups.append(ast.OneOf{
+                        try oneOfGroups.append(self.allocator, ast.OneOf{
                             .name = ast.Identifier{
                                 .value = try self.copyString(oneOfNameToken.literal),
                                 .range = nameToken.range(),
@@ -612,7 +615,7 @@ const Context = struct {
             _ = self.consumeOptionalTokenBool(.Comma);
         }
 
-        try self.messages.append(ast.Message{
+        try self.messages.append(self.allocator, ast.Message{
             .name = ast.Identifier{ .value = try self.copyString(nameToken.literal), .range = nameToken.range() },
             .embeddedMessages = embeddedMessages.items,
             .documentation = documentation,
@@ -698,7 +701,7 @@ const Context = struct {
             .OneOf => {
                 const start = nextToken.position;
                 self.consume();
-                var fieldList = std.ArrayList(ast.Field).init(self.allocator);
+                var fieldList = std.ArrayList(ast.Field).initCapacity(self.allocator, 0) catch unreachable;
                 const oneOfBody = try self.parseOneOfBody(null, &fieldList);
                 return .initValue(ast.Field.RangedDataType{
                     .value = .{ .OneOf = oneOfBody.data },
@@ -754,7 +757,7 @@ const Context = struct {
             .Identifier,
         };
         _ = try self.consumeRequiredToken(.LeftCurlyBrace, "{");
-        var options = std.ArrayList(ast.OptionAssignmentNode).init(self.allocator);
+        var options = std.ArrayList(ast.OptionAssignmentNode).initCapacity(self.allocator, 0) catch unreachable;
         const initialPosition = fields.items.len;
         const currentScope = self.scopeDelimiterContext();
 
@@ -764,12 +767,12 @@ const Context = struct {
                 switch (nextToken.kind) {
                     .Identifier => if (self.parseField(oneOfGroupIndex)) |v| {
                         // append the field
-                        try fields.append(v.data);
+                        try fields.append(self.allocator, v.data);
                         if (v.scopeExited) break :blk true;
                     } else |err| if (try self.recoverExitsScope(err, &.{.Comma}, true))
                         break :blk true,
                     .Hash, .RawHash, .SharedHash => if (self.parseOption(false, null)) |v| {
-                        try options.append(v.data);
+                        try options.append(self.allocator, v.data);
                         if (v.scopeExited) break :blk true;
                     } else |err| if (try self.recoverExitsScope(err, OneOfBodyRecoveryPoints, true))
                         break :blk true,
@@ -808,7 +811,7 @@ const Context = struct {
             return self.parseOptionBlock();
         }
 
-        var values = std.ArrayList(ast.OptionAssignmentNode).init(self.allocator);
+        var values = std.ArrayList(ast.OptionAssignmentNode).initCapacity(self.allocator, 0) catch unreachable;
         const scopeExited = blk: {
             while (true) {
                 const token = self.it.peek(1) orelse break :blk false;
@@ -816,7 +819,7 @@ const Context = struct {
                     break :blk false;
                 }
                 if (self.parseOption(false, null)) |v| {
-                    try values.append(v.data);
+                    try values.append(self.allocator, v.data);
                     if (v.scopeExited) break :blk true;
                 } else |err| if (try self.recoverExitsScope(err, RecoveryPoints, true))
                     break :blk true
@@ -847,7 +850,7 @@ const Context = struct {
             targetSet.insert(try self.parseOptionTarget());
         }
 
-        var fields = std.ArrayList(ast.Field).init(self.allocator);
+        var fields = std.ArrayList(ast.Field).initCapacity(self.allocator, 0) catch unreachable;
 
         while (true) {
             const nextToken = self.it.peek(1) orelse {
@@ -860,12 +863,13 @@ const Context = struct {
                     self.consume();
                     break;
                 },
-                else => try fields.append((try self.parseField(null)).data),
+                // TODO: FIX ME
+                else => try fields.append(self.allocator, (try self.parseField(null)).data),
             }
             _ = self.consumeOptionalTokenBool(.Comma);
         }
 
-        try self.optionDefinitions.append(ast.OptionDefinition{
+        try self.optionDefinitions.append(self.allocator, ast.OptionDefinition{
             .targets = targetSet,
             .fields = fields.items,
             .range = .{
@@ -909,8 +913,8 @@ const Context = struct {
         _ = self.consumeRequiredToken(.LeftCurlyBrace, "") catch |err|
             return self.recover(err, InterfaceRecoveryPoints, false);
 
-        var funcs = std.ArrayList(ast.Func).init(self.allocator);
-        var options = std.ArrayList(ast.OptionAssignmentNode).init(self.allocator);
+        var funcs = std.ArrayList(ast.Func).initCapacity(self.allocator, 0) catch unreachable;
+        var options = std.ArrayList(ast.OptionAssignmentNode).initCapacity(self.allocator, 0) catch unreachable;
 
         while (true) {
             const token = try self.peekNextOrError();
@@ -918,13 +922,13 @@ const Context = struct {
                 .Comment => self.consume(),
                 .Semicolon => self.consume(),
                 .Hash, .SharedHash, .RawHash => if (self.parseOption(false, null)) |v| {
-                    try options.append(v.data);
+                    try options.append(self.allocator, v.data);
                     if (v.scopeExited) break;
                 } else |err| if (try self.recoverExitsScope(err, InterfaceBodyRecoveryPoints, true))
                     break,
                 .Documentation => try self.captureDocumentationGroup(),
                 .Identifier => if (self.parseFunc()) |v| {
-                    try funcs.append(v.data);
+                    try funcs.append(self.allocator, v.data);
                     if (v.scopeExited) break;
                 } else |err| if (try self.recoverExitsScope(err, &.{.Semicolon}, true))
                     break,
@@ -942,7 +946,7 @@ const Context = struct {
             }
         }
 
-        try self.interfaces.append(ast.Interface{
+        try self.interfaces.append(self.allocator, ast.Interface{
             .name = ast.Identifier{
                 .value = try self.copyString(nameToken.literal),
                 .range = nameToken.range(),
@@ -1088,10 +1092,10 @@ const Context = struct {
                 .range = ast.Range{ .start = start, .endOffset = self.it.currentAssumeSafe().endOffset() },
                 .value = .{ .Group = blockOptions.data },
             };
-            try self.options.append(rootOption);
+            try self.options.append(self.allocator, rootOption);
         } else {
             const option = try self.parseOption(false, modifiers);
-            try self.options.append(option.data);
+            try self.options.append(self.allocator, option.data);
         }
     }
 
@@ -1216,7 +1220,7 @@ const Context = struct {
             .RawHash,
             .SharedHash,
         };
-        var values = std.ArrayList(ast.OptionAssignmentNode).init(self.allocator);
+        var values = std.ArrayList(ast.OptionAssignmentNode).initCapacity(self.allocator, 0) catch unreachable;
         _ = try self.consumeRequiredToken(.LeftCurlyBrace, "{");
         const currentScope = self.scopeDelimiterContext();
         const scopeExited = blk: {
@@ -1233,7 +1237,7 @@ const Context = struct {
                         continue;
                     },
                     else => if (self.parseOption(true, null)) |v| {
-                        try values.append(v.data);
+                        try values.append(self.allocator, v.data);
                         if (v.scopeExited) break :blk true;
                     } else |err| {
                         if (try self.recoverExitsScope(err, OptionBlockRecoveryPoints, true))
@@ -1262,7 +1266,7 @@ const Context = struct {
             .Comma,
         };
         try self.pushScopeDelimiter(.Bracket);
-        var values = std.ArrayList(ast.RangedValue).init(self.allocator);
+        var values = std.ArrayList(ast.RangedValue).initCapacity(self.allocator, 0) catch unreachable;
         const start = self.it.currentAssumeSafe().position;
         const currentScope = self.scopeDelimiterContext();
 
@@ -1277,7 +1281,7 @@ const Context = struct {
                     },
                     .Comma => self.consume(),
                     else => if (self.parseValue()) |v| {
-                        try values.append(v.data);
+                        try values.append(self.allocator, v.data);
                         if (v.scopeExited) {
                             break :blk true;
                         }
@@ -1302,7 +1306,7 @@ const Context = struct {
     fn parseValueObject(self: *Context) Error!ParseResult(ast.RangedValue) {
         const ObjectRecoveryPoints: []const TokenKindTag = &.{ .String, .Comma };
         try self.pushScopeDelimiter(.CurlyBrace);
-        var values = std.ArrayList(ast.Entry).init(self.allocator);
+        var values = std.ArrayList(ast.Entry).initCapacity(self.allocator, 0) catch unreachable;
         const start = self.it.currentAssumeSafe().position;
         const currentScope = self.scopeDelimiterContext();
 
@@ -1321,7 +1325,7 @@ const Context = struct {
                             continue :mainLoop;
                         };
                         if (self.parseValue()) |v| {
-                            try values.append(.{
+                            try values.append(self.allocator, .{
                                 .key = try self.copyString(next.kind.String),
                                 .value = v.data,
                             });

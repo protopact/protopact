@@ -1,5 +1,6 @@
 const ast = @import("ast.zig");
 const std = @import("std");
+const StackArray = @import("stack_array.zig").StackArray;
 
 const keywordTable = std.StaticStringMap(TokenKind).initComptime(.{
     .{ "pact", .Pact },
@@ -194,7 +195,7 @@ pub const Token = struct {
 };
 
 const TokenList = std.ArrayList(Token);
-const ErrorList = std.BoundedArray(ScanError, 10);
+const ErrorList = StackArray(ScanError, 10);
 const Context = struct {
     allocator: std.mem.Allocator,
     it: std.unicode.Utf8Iterator,
@@ -220,7 +221,7 @@ const Context = struct {
             .columnStart = 1,
             .line = 1,
             .tokens = try TokenList.initCapacity(allocator, InitialTokenCapacity),
-            .errors = ErrorList.init(0) catch unreachable,
+            .errors = ErrorList.init(),
         };
     }
 
@@ -337,7 +338,7 @@ const Context = struct {
     }
 
     inline fn addToken(self: *Context, kind: TokenKind) !void {
-        try self.tokens.append(Token{
+        try self.tokens.append(self.allocator, Token{
             .position = self.currentPosition(),
             .literal = self.currentLexeme(),
             .kind = kind,
@@ -592,7 +593,7 @@ const Context = struct {
                 }
                 if (starCount == 2) {
                     // NB: since we need to use the startPosition, we can't use addToken().
-                    try self.tokens.append(.{
+                    try self.tokens.append(self.allocator, .{
                         .kind = .{
                             .Documentation = .{
                                 .content = self.it.bytes[start..end],
@@ -603,7 +604,7 @@ const Context = struct {
                         .literal = self.currentLexeme(),
                     });
                 } else {
-                    try self.tokens.append(.{
+                    try self.tokens.append(self.allocator, .{
                         .kind = .{
                             .Comment = self.it.bytes[start..end],
                         },
@@ -738,9 +739,10 @@ pub fn tokenize(allocator: std.mem.Allocator, data: []const u8) TokenizeError!Re
     var arenaAllocator = std.heap.ArenaAllocator.init(allocator);
     errdefer arenaAllocator.deinit();
 
-    var ctx = try Context.init(arenaAllocator.allocator(), utf8View.iterator());
+    const ally = arenaAllocator.allocator();
+    var ctx = try Context.init(ally, utf8View.iterator());
     try ctx.scanAll();
-    try ctx.tokens.append(Token.eof());
+    try ctx.tokens.append(ally, Token.eof());
 
     return Result{
         .tokens = ctx.tokens.items,
