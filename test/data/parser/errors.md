@@ -654,9 +654,9 @@ messages:
 
 4:13[50] expected enum variant numerical value @literal=zero
 5:2[67-72] unexpected token @literal="One"
-6:10[83] expected option setting modifier or comma @literal=bad
+6:10[83] expected option setting modifier or end of statement @literal=bad
 6:60[133] expected value @literal=bad
-10:1[183] expected option setting modifier or comma @literal=interface
+10:1[183] expected option setting modifier or end of statement @literal=interface
 10:11[193-205] unexpected token @literal=some_service
 ```
 
@@ -680,7 +680,7 @@ enums:
       - name: "Static"
         value: 2
 
-3:5[40] expected option setting modifier or comma @literal=Static
+3:5[40] expected option setting modifier or end of statement @literal=Static
 ```
 
 # bad enum EOF
@@ -719,7 +719,7 @@ messages:
       - name: "age"
         type: "i32"
 
-3:5[36] expected option setting modifier or comma @literal=age
+3:5[36] expected option setting modifier or end of statement @literal=age
 ```
 
 # message poorly closed array option inside option block
@@ -805,7 +805,7 @@ messages:
         oneof_group_index: 0
 
 4:15[65] expected oneof group name @literal={
-10:13[192] expected option setting modifier or comma @literal=age
+10:13[192] expected option setting modifier or end of statement @literal=age
 11:43[247] expected > @literal=#
 ```
 
@@ -838,7 +838,7 @@ messages:
         type: "i32"
 
 3:15[39] expected field type @literal="some type"
-5:5[79] expected option setting modifier or comma @literal=another_bad_field_with_no_comma
+5:5[79] expected option setting modifier or end of statement @literal=another_bad_field_with_no_comma
 5:38[112] expected field type @literal=1.2
 ```
 
@@ -864,7 +864,7 @@ messages:
         type: "oneof"
 
 6:5[106] expected > @literal=}
-7:1[108] expected option setting modifier or comma @literal=)
+7:1[108] expected option setting modifier or end of statement @literal=)
 0:0[0] unexpected end of file @literal=
 ```
 

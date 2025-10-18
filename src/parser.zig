@@ -273,6 +273,7 @@ const Context = struct {
         .RawHash,
         .SharedHash,
         .Comma,
+        .Semicolon,
     };
 
     fn init(allocator: Allocator, tokens: []const scanner.Token) Context {
@@ -930,8 +931,7 @@ const Context = struct {
         while (true) {
             const token = try self.peekNextOrError();
             switch (token.kind) {
-                .Comment => self.consume(),
-                .Semicolon => self.consume(),
+                .Semicolon, .Comma, .Comment => self.consume(),
                 .Hash, .SharedHash, .RawHash => if (self.parseOption(false, null)) |v| {
                     try options.append(v.data);
                     if (v.scopeExited) break;
@@ -1137,7 +1137,7 @@ const Context = struct {
                 return .{ .shared = true, .raw = false };
             },
             else => if (needsHashPrefix) {
-                self.addError(SyntaxError.expectToken(&token, "option setting modifier or comma"));
+                self.addError(SyntaxError.expectToken(&token, "option setting modifier or end of statement"));
                 self.consume();
                 return Error.UnexpectedToken;
             } else return .default(),
