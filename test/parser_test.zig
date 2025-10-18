@@ -17,17 +17,17 @@ const TestCase = struct {
     expected: []const u8,
 };
 
-fn formatError(writer: anytype, err: parser.SyntaxError) !void {
+fn formatError(writer: *std.Io.Writer, err: parser.SyntaxError) !void {
     if (err.location) |loc| {
         switch (loc) {
-            .Position => try std.fmt.format(writer, "{d}:{d}[{d}] {s} @literal={?s}", .{
+            .Position => try writer.print("{d}:{d}[{d}] {s} @literal={?s}", .{
                 loc.Position.line,
                 loc.Position.column,
                 loc.Position.offset,
                 err.message,
                 err.literal,
             }),
-            .Range => try std.fmt.format(writer, "{d}:{d}[{d}-{d}] {s} @literal={?s}", .{
+            .Range => try writer.print("{d}:{d}[{d}-{d}] {s} @literal={?s}", .{
                 loc.Range.start.line,
                 loc.Range.start.column,
                 loc.Range.start.offset,
@@ -36,7 +36,7 @@ fn formatError(writer: anytype, err: parser.SyntaxError) !void {
                 err.literal,
             }),
         }
-    } else try std.fmt.format(writer, "{s} @literal={?s}", .{
+    } else try writer.print("{s} @literal={?s}", .{
         err.message,
         err.literal,
     });
@@ -61,7 +61,7 @@ fn captureBlock(source: []const u8, startIndex: usize) !struct { newPos: usize, 
 }
 
 fn readTestCases(allocator: Allocator, source: String) ![]TestCase {
-    var list = std.ArrayList(TestCase).init(allocator);
+    var list = try std.ArrayList(TestCase).initCapacity(allocator, 25);
 
     var cursor: usize = 0;
     while (true) {
@@ -75,7 +75,7 @@ fn readTestCases(allocator: Allocator, source: String) ![]TestCase {
         const expectationBlock = try captureBlock(source, cursor);
         cursor = expectationBlock.newPos;
 
-        try list.append(.{
+        try list.append(allocator, .{
             .name = name,
             .source = codeBlock.content,
             .expected = expectationBlock.content,
@@ -117,20 +117,23 @@ fn runTests(comptime sourceFileName: []const u8, opts: TestOptions) !void {
 
         const result = try parser.parse(testCaseAllocator.allocator(), tt.source);
 
-        var output = std.ArrayList(u8).init(testCaseAllocator.allocator());
+        var output = std.Io.Writer.Allocating.init(allocator.allocator());
+        defer output.deinit();
 
         if (result.ok() or opts.writeDocumentOnError) {
-            try opts.marshaler.writeDocument(output.writer(), result.document);
+            try opts.marshaler.writeDocument(&output.writer, result.document);
         }
 
         for (result.errors) |err| {
-            if (output.items.len > 0) {
-                try output.writer().writeByte('\n');
+            if (output.written().len > 0) {
+                try output.writer.writeByte('\n');
             }
-            try formatError(output.writer(), err);
+            try formatError(&output.writer, err);
         }
 
-        const received = std.mem.trim(u8, output.items, "\n\t\r ");
+        try output.writer.flush();
+
+        const received = std.mem.trim(u8, output.toArrayList().items, "\n\t\r ");
         if (!std.mem.eql(u8, tt.expected, received)) {
             std.debug.print(
                 "Test '{s}' failed\n==== Expected ====\n{s}\n\n==== Received ====\n{s}\n\n",

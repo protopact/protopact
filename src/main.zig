@@ -14,11 +14,11 @@ pub fn main() !void {
         return;
     };
 
-    const sourceFile = try std.fs.cwd().openFile(fileName, .{ .mode = .read_only });
-    const data = try sourceFile.readToEndAlloc(allocator, 1_000_000);
+    const data = try std.fs.cwd().readFileAlloc(allocator, fileName, std.math.maxInt(usize));
 
     const now = std.time.microTimestamp();
     const parseResult = try parser.parse(allocator, data);
+    const diff = std.time.microTimestamp() - now;
     var marshaler = astcoder.YamlMarshaller{
         .excludeZeroValues = true,
         .includeConstants = true,
@@ -33,8 +33,13 @@ pub fn main() !void {
         .includePact = true,
         .includeRange = false,
     };
-    const diff = std.time.microTimestamp() - now;
-    try marshaler.writeDocument(std.io.getStdOut().writer(), parseResult.document);
+
+    var buffer: [2048]u8 = undefined;
+    var stdOutFile = std.fs.File.stdout();
+    var stdOutWriter = stdOutFile.writer(&buffer);
+
+    try marshaler.writeDocument(&stdOutWriter.interface, parseResult.document);
+    try stdOutWriter.interface.flush();
     for (parseResult.errors) |err| {
         std.debug.print("\nLiteral: {?s}, Message: {s}, Location: {?any}\n", .{
             err.literal,
@@ -42,5 +47,5 @@ pub fn main() !void {
             err.location,
         });
     }
-    std.debug.print("\ntook {d}ms s\n", .{@as(f32, @floatFromInt(diff)) / 1000.0});
+    std.debug.print("\ntook {d}ms\n", .{@as(f32, @floatFromInt(diff)) / 1000.0});
 }
