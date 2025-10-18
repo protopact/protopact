@@ -449,19 +449,19 @@ const Context = struct {
             return self.recover(err, EnumEntryRecoveryPoints, false);
         };
 
-        var options = std.ArrayList(ast.OptionAssignmentNode).initCapacity(self.allocator, 0) catch unreachable;
-        var variants = std.ArrayList(ast.EnumVariant).initCapacity(self.allocator, 0) catch unreachable;
+        var options = StackFallbackArray(ast.OptionAssignmentNode, 20).init(self.allocator);
+        var variants = StackFallbackArray(ast.EnumVariant, 20).init(self.allocator);
         while (true) {
             const token = try self.peekNextOrError();
             switch (token.kind) {
                 .Comment => self.consume(),
                 .Hash, .RawHash, .SharedHash => if (self.parseOption(false, null)) |v| {
-                    try options.append(self.allocator, v.data);
+                    try options.append(v.data);
                     if (v.scopeExited) break;
                 } else |err| if (try self.recoverExitsScope(err, EnumBodyRecoveryPoints, true))
                     break,
                 .Identifier => if (self.parseEnumVariant()) |v| {
-                    try variants.append(self.allocator, v.data);
+                    try variants.append(v.data);
                     if (v.scopeExited) break;
                 } else |err| if (try self.recoverExitsScope(err, EnumBodyRecoveryPoints, true))
                     break,
@@ -482,10 +482,13 @@ const Context = struct {
         }
 
         try self.enums.append(self.allocator, ast.Enum{
-            .name = ast.Identifier{ .value = try self.copyString(nameToken.literal), .range = nameToken.range() },
-            .variants = variants.items,
+            .name = ast.Identifier{
+                .value = try self.copyString(nameToken.literal),
+                .range = nameToken.range(),
+            },
+            .variants = try variants.toOwnedSlice(self.allocator),
             .documentation = documentation,
-            .options = options.items,
+            .options = try options.toOwnedSlice(self.allocator),
             .range = .{ .start = nameToken.position, .endOffset = self.it.currentAssumeSafe().endOffset() },
         });
     }
@@ -553,10 +556,10 @@ const Context = struct {
             return self.recover(err, MessageEntryRecoveryPoints, false);
         };
 
-        var options = std.ArrayList(ast.OptionAssignmentNode).initCapacity(self.allocator, 0) catch unreachable;
-        var fields = std.ArrayList(ast.Field).initCapacity(self.allocator, 0) catch unreachable;
-        var embeddedMessages = std.ArrayList(ast.Selector).initCapacity(self.allocator, 0) catch unreachable;
-        var oneOfGroups = std.ArrayList(ast.OneOf).initCapacity(self.allocator, 0) catch unreachable;
+        var options = StackFallbackArray(ast.OptionAssignmentNode, 20).init(self.allocator);
+        var fields = StackFallbackArray(ast.Field, 40).init(self.allocator);
+        var embeddedMessages = StackFallbackArray(ast.Selector, 10).init(self.allocator);
+        var oneOfGroups = StackFallbackArray(ast.OneOf, 10).init(self.allocator);
 
         while (true) {
             const token = try self.peekNextOrError();
@@ -564,12 +567,12 @@ const Context = struct {
                 .Comment => self.consume(),
                 .Documentation => try self.captureDocumentationGroup(),
                 .Hash, .RawHash, .SharedHash => if (self.parseOption(false, null)) |v| {
-                    try options.append(self.allocator, v.data);
+                    try options.append(v.data);
                     if (v.scopeExited) break;
                 } else |err| if (try self.recoverExitsScope(err, MessageBodyRecoveryPoints, true))
                     break,
                 .Identifier => if (self.parseField(null)) |v| {
-                    try fields.append(self.allocator, v.data);
+                    try fields.append(v.data);
                     if (v.scopeExited) break;
                 } else |err| if (try self.recoverExitsScope(err, &.{.Comma}, true))
                     break,
@@ -577,7 +580,7 @@ const Context = struct {
                     self.consume();
                     if (self.parseSelector()) |selector| {
                         // TODO: Might need to keep the field index just so that the position is clear.
-                        try embeddedMessages.append(self.allocator, selector);
+                        try embeddedMessages.append(selector);
                     } else |err| if (try self.recoverExitsScope(err, MessageBodyRecoveryPoints, false)) break;
                 },
                 .OneOf => {
@@ -585,8 +588,8 @@ const Context = struct {
                     self.consume();
                     const oneOfNameToken = self.consumeRequiredToken(.Identifier, "oneof group name") catch |err|
                         if (try self.recoverExitsScope(err, MessageBodyRecoveryPoints, false)) break else continue;
-                    if (self.parseOneOfBody(oneOfGroups.items.len, &fields)) |v| {
-                        try oneOfGroups.append(self.allocator, ast.OneOf{
+                    if (self.processOneOfBody(oneOfGroups.len(), &fields)) |v| {
+                        try oneOfGroups.append(ast.OneOf{
                             .name = ast.Identifier{
                                 .value = try self.copyString(oneOfNameToken.literal),
                                 .range = nameToken.range(),
@@ -616,12 +619,15 @@ const Context = struct {
         }
 
         try self.messages.append(self.allocator, ast.Message{
-            .name = ast.Identifier{ .value = try self.copyString(nameToken.literal), .range = nameToken.range() },
-            .embeddedMessages = embeddedMessages.items,
+            .name = ast.Identifier{
+                .value = try self.copyString(nameToken.literal),
+                .range = nameToken.range(),
+            },
+            .embeddedMessages = try embeddedMessages.toOwnedSlice(self.allocator),
             .documentation = documentation,
-            .fields = fields.items,
-            .options = options.items,
-            .oneOfGroups = oneOfGroups.items,
+            .fields = try fields.toOwnedSlice(self.allocator),
+            .options = try options.toOwnedSlice(self.allocator),
+            .oneOfGroups = try oneOfGroups.toOwnedSlice(self.allocator),
             .range = .{ .start = nameToken.position, .endOffset = self.it.currentAssumeSafe().endOffset() },
         });
     }
@@ -701,8 +707,7 @@ const Context = struct {
             .OneOf => {
                 const start = nextToken.position;
                 self.consume();
-                var fieldList = std.ArrayList(ast.Field).initCapacity(self.allocator, 0) catch unreachable;
-                const oneOfBody = try self.parseOneOfBody(null, &fieldList);
+                const oneOfBody = try self.parseOneOfBodyType();
                 return .initValue(ast.Field.RangedDataType{
                     .value = .{ .OneOf = oneOfBody.data },
                     .range = ast.Range{
@@ -743,12 +748,11 @@ const Context = struct {
         }
     }
 
-    /// parses oneof bodies. It can append to an existing ArrayList if one is provided.
-    fn parseOneOfBody(
+    fn processOneOfBody(
         self: *Context,
         oneOfGroupIndex: ?usize,
-        fields: *std.ArrayList(ast.Field),
-    ) Error!ParseResult(ast.Field.OneOfTypeInfo) {
+        fields: *StackFallbackArray(ast.Field, 40),
+    ) Error!ParseResult(struct { options: []const ast.OptionAssignmentNode }) {
         const OneOfBodyRecoveryPoints: []const TokenKindTag = &.{
             .Hash,
             .SharedHash,
@@ -757,8 +761,7 @@ const Context = struct {
             .Identifier,
         };
         _ = try self.consumeRequiredToken(.LeftCurlyBrace, "{");
-        var options = std.ArrayList(ast.OptionAssignmentNode).initCapacity(self.allocator, 0) catch unreachable;
-        const initialPosition = fields.items.len;
+        var options = StackFallbackArray(ast.OptionAssignmentNode, 20).init(self.allocator);
         const currentScope = self.scopeDelimiterContext();
 
         const scopeExited = blk: {
@@ -767,12 +770,12 @@ const Context = struct {
                 switch (nextToken.kind) {
                     .Identifier => if (self.parseField(oneOfGroupIndex)) |v| {
                         // append the field
-                        try fields.append(self.allocator, v.data);
+                        try fields.append(v.data);
                         if (v.scopeExited) break :blk true;
                     } else |err| if (try self.recoverExitsScope(err, &.{.Comma}, true))
                         break :blk true,
                     .Hash, .RawHash, .SharedHash => if (self.parseOption(false, null)) |v| {
-                        try options.append(self.allocator, v.data);
+                        try options.append(v.data);
                         if (v.scopeExited) break :blk true;
                     } else |err| if (try self.recoverExitsScope(err, OneOfBodyRecoveryPoints, true))
                         break :blk true,
@@ -793,12 +796,20 @@ const Context = struct {
         };
 
         return .initValue(
-            ast.Field.OneOfTypeInfo{
-                .fields = fields.items[initialPosition..],
-                .options = options.items,
-            },
+            .{ .options = try options.toOwnedSlice(self.allocator) },
             scopeExited and self.scopeDelimiterContext() + 1 != currentScope,
         );
+    }
+
+    /// parses oneof body that is a field type, not a grouping.
+    fn parseOneOfBodyType(
+        self: *Context,
+    ) Error!ParseResult(ast.Field.OneOfTypeInfo) {
+        var fields = StackFallbackArray(ast.Field, 40).init(self.allocator);
+        return if (self.processOneOfBody(null, &fields)) |result| .initValue(.{
+            .fields = try fields.toOwnedSlice(self.allocator),
+            .options = result.data.options,
+        }, result.scopeExited) else |err| err;
     }
 
     fn parseItemOptions(
@@ -811,7 +822,7 @@ const Context = struct {
             return self.parseOptionBlock();
         }
 
-        var values = std.ArrayList(ast.OptionAssignmentNode).initCapacity(self.allocator, 0) catch unreachable;
+        var values = StackFallbackArray(ast.OptionAssignmentNode, 10).init(self.allocator);
         const scopeExited = blk: {
             while (true) {
                 const token = self.it.peek(1) orelse break :blk false;
@@ -819,7 +830,7 @@ const Context = struct {
                     break :blk false;
                 }
                 if (self.parseOption(false, null)) |v| {
-                    try values.append(self.allocator, v.data);
+                    try values.append(v.data);
                     if (v.scopeExited) break :blk true;
                 } else |err| if (try self.recoverExitsScope(err, RecoveryPoints, true))
                     break :blk true
@@ -828,7 +839,7 @@ const Context = struct {
             }
         };
 
-        return .initValue(values.items, scopeExited);
+        return .initValue(try values.toOwnedSlice(self.allocator), scopeExited);
     }
 
     fn processOptionDefinition(self: *Context) Error!void {
@@ -850,7 +861,7 @@ const Context = struct {
             targetSet.insert(try self.parseOptionTarget());
         }
 
-        var fields = std.ArrayList(ast.Field).initCapacity(self.allocator, 0) catch unreachable;
+        var fields = StackFallbackArray(ast.Field, 40).init(self.allocator);
 
         while (true) {
             const nextToken = self.it.peek(1) orelse {
@@ -864,14 +875,14 @@ const Context = struct {
                     break;
                 },
                 // TODO: FIX ME
-                else => try fields.append(self.allocator, (try self.parseField(null)).data),
+                else => try fields.append((try self.parseField(null)).data),
             }
             _ = self.consumeOptionalTokenBool(.Comma);
         }
 
         try self.optionDefinitions.append(self.allocator, ast.OptionDefinition{
             .targets = targetSet,
-            .fields = fields.items,
+            .fields = try fields.toOwnedSlice(self.allocator),
             .range = .{
                 .start = start,
                 .endOffset = self.it.currentAssumeSafe().endOffset(),
@@ -913,8 +924,8 @@ const Context = struct {
         _ = self.consumeRequiredToken(.LeftCurlyBrace, "") catch |err|
             return self.recover(err, InterfaceRecoveryPoints, false);
 
-        var funcs = std.ArrayList(ast.Func).initCapacity(self.allocator, 0) catch unreachable;
-        var options = std.ArrayList(ast.OptionAssignmentNode).initCapacity(self.allocator, 0) catch unreachable;
+        var funcs = StackFallbackArray(ast.Func, 40).init(self.allocator);
+        var options = StackFallbackArray(ast.OptionAssignmentNode, 20).init(self.allocator);
 
         while (true) {
             const token = try self.peekNextOrError();
@@ -922,13 +933,13 @@ const Context = struct {
                 .Comment => self.consume(),
                 .Semicolon => self.consume(),
                 .Hash, .SharedHash, .RawHash => if (self.parseOption(false, null)) |v| {
-                    try options.append(self.allocator, v.data);
+                    try options.append(v.data);
                     if (v.scopeExited) break;
                 } else |err| if (try self.recoverExitsScope(err, InterfaceBodyRecoveryPoints, true))
                     break,
                 .Documentation => try self.captureDocumentationGroup(),
                 .Identifier => if (self.parseFunc()) |v| {
-                    try funcs.append(self.allocator, v.data);
+                    try funcs.append(v.data);
                     if (v.scopeExited) break;
                 } else |err| if (try self.recoverExitsScope(err, &.{.Semicolon}, true))
                     break,
@@ -951,9 +962,9 @@ const Context = struct {
                 .value = try self.copyString(nameToken.literal),
                 .range = nameToken.range(),
             },
-            .funcs = funcs.items,
+            .funcs = try funcs.toOwnedSlice(self.allocator),
             .documentation = documentation,
-            .options = options.items,
+            .options = try options.toOwnedSlice(self.allocator),
             .range = ast.Range{
                 .start = nameToken.position,
                 .endOffset = self.it.currentAssumeSafe().endOffset(),
@@ -1220,7 +1231,7 @@ const Context = struct {
             .RawHash,
             .SharedHash,
         };
-        var values = std.ArrayList(ast.OptionAssignmentNode).initCapacity(self.allocator, 0) catch unreachable;
+        var values = StackFallbackArray(ast.OptionAssignmentNode, 20).init(self.allocator);
         _ = try self.consumeRequiredToken(.LeftCurlyBrace, "{");
         const currentScope = self.scopeDelimiterContext();
         const scopeExited = blk: {
@@ -1237,7 +1248,7 @@ const Context = struct {
                         continue;
                     },
                     else => if (self.parseOption(true, null)) |v| {
-                        try values.append(self.allocator, v.data);
+                        try values.append(v.data);
                         if (v.scopeExited) break :blk true;
                     } else |err| {
                         if (try self.recoverExitsScope(err, OptionBlockRecoveryPoints, true))
@@ -1248,7 +1259,10 @@ const Context = struct {
                 _ = self.consumeOptionalTokenBool(.Comma);
             }
         };
-        return .initValue(values.items, scopeExited and (self.scopeDelimiterContext() + 1 != currentScope));
+        return .initValue(
+            try values.toOwnedSlice(self.allocator),
+            scopeExited and (self.scopeDelimiterContext() + 1 != currentScope),
+        );
     }
 
     /// parses an array of ranged values.
@@ -1266,7 +1280,7 @@ const Context = struct {
             .Comma,
         };
         try self.pushScopeDelimiter(.Bracket);
-        var values = std.ArrayList(ast.RangedValue).initCapacity(self.allocator, 0) catch unreachable;
+        var values = StackFallbackArray(ast.RangedValue, 20).init(self.allocator);
         const start = self.it.currentAssumeSafe().position;
         const currentScope = self.scopeDelimiterContext();
 
@@ -1281,7 +1295,7 @@ const Context = struct {
                     },
                     .Comma => self.consume(),
                     else => if (self.parseValue()) |v| {
-                        try values.append(self.allocator, v.data);
+                        try values.append(v.data);
                         if (v.scopeExited) {
                             break :blk true;
                         }
@@ -1295,7 +1309,7 @@ const Context = struct {
         };
 
         return .initValue(.{
-            .value = .{ .Array = values.items },
+            .value = .{ .Array = try values.toOwnedSlice(self.allocator) },
             .range = .{ .start = start, .endOffset = self.it.currentAssumeSafe().endOffset() },
         }, scopeExited and (self.scopeDelimiterContext() + 1 != currentScope));
     }
@@ -1306,7 +1320,7 @@ const Context = struct {
     fn parseValueObject(self: *Context) Error!ParseResult(ast.RangedValue) {
         const ObjectRecoveryPoints: []const TokenKindTag = &.{ .String, .Comma };
         try self.pushScopeDelimiter(.CurlyBrace);
-        var values = std.ArrayList(ast.Entry).initCapacity(self.allocator, 0) catch unreachable;
+        var values = StackFallbackArray(ast.Entry, 20).init(self.allocator);
         const start = self.it.currentAssumeSafe().position;
         const currentScope = self.scopeDelimiterContext();
 
@@ -1325,7 +1339,7 @@ const Context = struct {
                             continue :mainLoop;
                         };
                         if (self.parseValue()) |v| {
-                            try values.append(self.allocator, .{
+                            try values.append(.{
                                 .key = try self.copyString(next.kind.String),
                                 .value = v.data,
                             });
@@ -1344,7 +1358,7 @@ const Context = struct {
         };
 
         return .initValue(.{
-            .value = .{ .Object = values.items },
+            .value = .{ .Object = try values.toOwnedSlice(self.allocator) },
             .range = .{ .start = start, .endOffset = self.it.currentAssumeSafe().endOffset() },
         }, scopeExited and (self.scopeDelimiterContext() + 1 != currentScope));
     }

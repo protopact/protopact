@@ -80,6 +80,10 @@ pub fn StackFallbackArray(T: type, comptime count: usize) type {
             try self.heapArray.append(self.allocator, item);
         }
 
+        pub fn len(self: Self) usize {
+            return self.stackLen + self.heapArray.items.len;
+        }
+
         /// allocates memory with the newAllocator and drains both the stack and any dynamically allocated items
         /// into the new memory.
         /// NOTE: The heap allocated buffer gets freed if this function returns without an error.
