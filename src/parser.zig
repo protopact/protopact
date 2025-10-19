@@ -208,6 +208,7 @@ const Context = struct {
     const TokenKindTag = std.meta.Tag(scanner.TokenKind);
 
     allocator: Allocator,
+    transientAllocator: std.mem.Allocator,
     it: TokenIterator,
     errors: ErrorList,
     scopeDelimiters: ScopeDelimiterList,
@@ -276,9 +277,10 @@ const Context = struct {
         .Semicolon,
     };
 
-    fn init(allocator: Allocator, tokens: []const scanner.Token) Context {
+    fn init(allocator: Allocator, transientAllocator: Allocator, tokens: []const scanner.Token) Context {
         return .{
             .allocator = allocator,
+            .transientAllocator = transientAllocator,
             .it = TokenIterator.init(tokens),
             .errors = ErrorList.init(),
             .scopeDelimiters = ScopeDelimiterList.init(),
@@ -450,8 +452,8 @@ const Context = struct {
             return self.recover(err, EnumEntryRecoveryPoints, false);
         };
 
-        var options = StackFallbackArray(ast.OptionAssignmentNode, 20).init(self.allocator);
-        var variants = StackFallbackArray(ast.EnumVariant, 20).init(self.allocator);
+        var options = StackFallbackArray(ast.OptionAssignmentNode, 20).init(self.transientAllocator);
+        var variants = StackFallbackArray(ast.EnumVariant, 20).init(self.transientAllocator);
         while (true) {
             const token = try self.peekNextOrError();
             switch (token.kind) {
@@ -557,10 +559,10 @@ const Context = struct {
             return self.recover(err, MessageEntryRecoveryPoints, false);
         };
 
-        var options = StackFallbackArray(ast.OptionAssignmentNode, 20).init(self.allocator);
-        var fields = StackFallbackArray(ast.Field, 40).init(self.allocator);
-        var embeddedMessages = StackFallbackArray(ast.Selector, 10).init(self.allocator);
-        var oneOfGroups = StackFallbackArray(ast.OneOf, 10).init(self.allocator);
+        var options = StackFallbackArray(ast.OptionAssignmentNode, 20).init(self.transientAllocator);
+        var fields = StackFallbackArray(ast.Field, 40).init(self.transientAllocator);
+        var embeddedMessages = StackFallbackArray(ast.Selector, 10).init(self.transientAllocator);
+        var oneOfGroups = StackFallbackArray(ast.OneOf, 10).init(self.transientAllocator);
 
         while (true) {
             const token = try self.peekNextOrError();
@@ -762,7 +764,7 @@ const Context = struct {
             .Identifier,
         };
         _ = try self.consumeRequiredToken(.LeftCurlyBrace, "{");
-        var options = StackFallbackArray(ast.OptionAssignmentNode, 20).init(self.allocator);
+        var options = StackFallbackArray(ast.OptionAssignmentNode, 20).init(self.transientAllocator);
         const currentScope = self.scopeDelimiterContext();
 
         const scopeExited = blk: {
@@ -806,7 +808,7 @@ const Context = struct {
     fn parseOneOfBodyType(
         self: *Context,
     ) Error!ParseResult(ast.Field.OneOfTypeInfo) {
-        var fields = StackFallbackArray(ast.Field, 40).init(self.allocator);
+        var fields = StackFallbackArray(ast.Field, 40).init(self.transientAllocator);
         return if (self.processOneOfBody(null, &fields)) |result| .initValue(.{
             .fields = try fields.toOwnedSlice(self.allocator),
             .options = result.data.options,
@@ -823,7 +825,7 @@ const Context = struct {
             return self.parseOptionBlock();
         }
 
-        var values = StackFallbackArray(ast.OptionAssignmentNode, 10).init(self.allocator);
+        var values = StackFallbackArray(ast.OptionAssignmentNode, 10).init(self.transientAllocator);
         const scopeExited = blk: {
             while (true) {
                 const token = self.it.peek(1) orelse break :blk false;
@@ -862,7 +864,7 @@ const Context = struct {
             targetSet.insert(try self.parseOptionTarget());
         }
 
-        var fields = StackFallbackArray(ast.Field, 40).init(self.allocator);
+        var fields = StackFallbackArray(ast.Field, 40).init(self.transientAllocator);
 
         while (true) {
             const nextToken = self.it.peek(1) orelse {
@@ -925,8 +927,8 @@ const Context = struct {
         _ = self.consumeRequiredToken(.LeftCurlyBrace, "") catch |err|
             return self.recover(err, InterfaceRecoveryPoints, false);
 
-        var funcs = StackFallbackArray(ast.Func, 40).init(self.allocator);
-        var options = StackFallbackArray(ast.OptionAssignmentNode, 20).init(self.allocator);
+        var funcs = StackFallbackArray(ast.Func, 40).init(self.transientAllocator);
+        var options = StackFallbackArray(ast.OptionAssignmentNode, 20).init(self.transientAllocator);
 
         while (true) {
             const token = try self.peekNextOrError();
@@ -1231,7 +1233,7 @@ const Context = struct {
             .RawHash,
             .SharedHash,
         };
-        var values = StackFallbackArray(ast.OptionAssignmentNode, 20).init(self.allocator);
+        var values = StackFallbackArray(ast.OptionAssignmentNode, 20).init(self.transientAllocator);
         _ = try self.consumeRequiredToken(.LeftCurlyBrace, "{");
         const currentScope = self.scopeDelimiterContext();
         const scopeExited = blk: {
@@ -1280,7 +1282,7 @@ const Context = struct {
             .Comma,
         };
         try self.pushScopeDelimiter(.Bracket);
-        var values = StackFallbackArray(ast.RangedValue, 20).init(self.allocator);
+        var values = StackFallbackArray(ast.RangedValue, 20).init(self.transientAllocator);
         const start = self.it.currentAssumeSafe().position;
         const currentScope = self.scopeDelimiterContext();
 
@@ -1320,7 +1322,7 @@ const Context = struct {
     fn parseValueObject(self: *Context) Error!ParseResult(ast.RangedValue) {
         const ObjectRecoveryPoints: []const TokenKindTag = &.{ .String, .Comma };
         try self.pushScopeDelimiter(.CurlyBrace);
-        var values = StackFallbackArray(ast.Entry, 20).init(self.allocator);
+        var values = StackFallbackArray(ast.Entry, 20).init(self.transientAllocator);
         const start = self.it.currentAssumeSafe().position;
         const currentScope = self.scopeDelimiterContext();
 
@@ -1916,14 +1918,21 @@ pub const Result = struct {
     }
 };
 
-pub fn parse(allocator: Allocator, content: []const u8) ParseError!Result {
+pub const Options = struct {
+    transientAllocator: ?std.mem.Allocator = null,
+};
+
+pub fn parse(allocator: Allocator, content: []const u8, opts: Options) ParseError!Result {
     var resultAllocator = std.heap.ArenaAllocator.init(allocator);
     errdefer resultAllocator.deinit();
+
+    var transientAllocator = std.heap.ArenaAllocator.init(opts.transientAllocator orelse allocator);
+    defer transientAllocator.deinit();
 
     var scanResult = try scanner.tokenize(allocator, content);
     defer scanResult.deinit();
 
-    var ctx = Context.init(resultAllocator.allocator(), scanResult.tokens);
+    var ctx = Context.init(resultAllocator.allocator(), transientAllocator.allocator(), scanResult.tokens);
     for (scanResult.errors) |scanError| {
         ctx.addError(SyntaxError{
             .message = scanError.message,

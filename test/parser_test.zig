@@ -115,7 +115,7 @@ fn runTests(comptime sourceFileName: []const u8, opts: TestOptions) !void {
         var testCaseAllocator = std.heap.ArenaAllocator.init(std.testing.allocator);
         defer testCaseAllocator.deinit();
 
-        const result = try parser.parse(testCaseAllocator.allocator(), tt.source);
+        const result = try parser.parse(testCaseAllocator.allocator(), tt.source, .{});
 
         var output = std.Io.Writer.Allocating.init(allocator.allocator());
         defer output.deinit();
