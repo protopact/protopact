@@ -14,11 +14,17 @@ pub fn main() !void {
         return;
     };
 
+    const quiet = if (it.next()) |x| std.mem.eql(u8, x, "-q") else false;
+
     const data = try std.fs.cwd().readFileAlloc(allocator, fileName, std.math.maxInt(usize));
 
     const now = std.time.microTimestamp();
     const parseResult = try parser.parse(allocator, data);
     const diff = std.time.microTimestamp() - now;
+    if (quiet) {
+        std.debug.print("\ntook {d}ms\n", .{@as(f32, @floatFromInt(diff)) / 1000.0});
+        return;
+    }
     var marshaler = astcoder.YamlMarshaller{
         .excludeZeroValues = true,
         .includeConstants = true,
