@@ -28,7 +28,7 @@ enums:
 # value assignment and variant options
 
 ```pactum
-enum Color { Red = 1, Green #required, Blue = 51 s#ignore r#"meshapi.io:name" = "b" }
+enum Color { Red = 1, Green #required, Blue = 51 p#ignore r#"meshapi.io:name" = "b" }
 ```
 
 ```yaml
@@ -47,7 +47,7 @@ enums:
         value: null
         options:
           - raw: false
-            shared: false
+            private: false
             range: "1:30[29-37]"
             selector:
               content: "required"
@@ -60,7 +60,7 @@ enums:
         value: 51
         options:
           - raw: false
-            shared: true
+            private: true
             range: "1:52[51-57]"
             selector:
               content: "ignore"
@@ -69,7 +69,7 @@ enums:
               range: "1:52[51-57]"
               data: true
           - raw: true
-            shared: true
+            private: false
             range: "1:61[60-83]"
             selector:
               content: "meshapi.io:name"
@@ -83,7 +83,7 @@ enums:
 
 ```pactum
 enum Color {
-  s#openapi {
+  p#openapi {
 		description = "Represents an RGB color."
 	}
 
@@ -105,14 +105,14 @@ enums:
     range: "1:6[5-149]"
     options:
       - raw: false
-        shared: true
+        private: true
         range: "2:5[17-72]"
         selector:
           content: "openapi"
           range: "2:5[17-24]"
         block:
           - raw: false
-            shared: false
+            private: false
             range: "3:3[29-69]"
             selector:
               content: "description"
@@ -121,14 +121,14 @@ enums:
               range: "3:17[43-69]"
               data: "Represents an RGB color."
       - raw: false
-        shared: false
+        private: false
         range: "6:3[76-103]"
         selector:
           content: "cpp"
           range: "6:3[76-79]"
         block:
           - raw: false
-            shared: false
+            private: false
             range: "7:3[84-100]"
             selector:
               content: "prefix"
@@ -142,7 +142,7 @@ enums:
         value: 0
         options:
           - raw: false
-            shared: false
+            private: false
             range: "10:15[119-125]"
             selector:
               content: "ignore"
@@ -225,7 +225,7 @@ enums:
 ```pactum
 enum Color {
 	WithComma {
-		s#shared_option = 1
+		p#shared_option = 1
 		regular_option = false
 	},
 	WithoutComma = 2 {
@@ -247,7 +247,7 @@ enums:
         value: null
         options:
           - raw: false
-            shared: true
+            private: true
             range: "3:5[30-47]"
             selector:
               content: "shared_option"
@@ -256,7 +256,7 @@ enums:
               range: "3:21[46-47]"
               data: 1
           - raw: false
-            shared: false
+            private: false
             range: "4:3[50-72]"
             selector:
               content: "regular_option"
@@ -269,7 +269,7 @@ enums:
         value: 2
         options:
           - raw: true
-            shared: true
+            private: false
             range: "7:5[101-129]"
             selector:
               content: "meshapi:meta"
@@ -304,7 +304,7 @@ enums:
         value: null
         options:
           - raw: false
-            shared: false
+            private: false
             range: "2:12[24-30]"
             selector:
               content: "ignore"

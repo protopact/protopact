@@ -31,7 +31,7 @@ constants:
       data: 1
     options:
       - raw: false
-        shared: false
+        private: false
         range: "1:18[17-25]"
         selector:
           content: "required"
@@ -69,7 +69,7 @@ constants:
           data: false
     options:
       - raw: false
-        shared: false
+        private: false
         range: "2:26[33-47]"
         selector:
           content: "ignore"
@@ -88,7 +88,7 @@ constants:
           data: "something"
     options:
       - raw: false
-        shared: false
+        private: false
         range: "5:6[90-103]"
         selector:
           content: "ignore"

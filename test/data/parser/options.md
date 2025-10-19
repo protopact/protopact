@@ -7,7 +7,7 @@
 ```yaml
 options:
   - raw: false
-    shared: false
+    private: false
     range: "1:2[1-9]"
     selector:
       content: "required"
@@ -20,13 +20,13 @@ options:
 # shared flag
 
 ```pactum
-s#optional
+p#optional
 ```
 
 ```yaml
 options:
   - raw: false
-    shared: true
+    private: true
     range: "1:3[2-10]"
     selector:
       content: "optional"
@@ -45,7 +45,7 @@ r#optional
 ```yaml
 options:
   - raw: true
-    shared: true
+    private: false
     range: "1:3[2-10]"
     selector:
       content: "optional"
@@ -64,7 +64,7 @@ r#"optional"
 ```yaml
 options:
   - raw: true
-    shared: true
+    private: false
     range: "1:3[2-12]"
     selector:
       content: "optional"
@@ -83,7 +83,7 @@ r#"com.pancake.io/optional"
 ```yaml
 options:
   - raw: true
-    shared: true
+    private: false
     range: "1:3[2-27]"
     selector:
       content: "com.pancake.io/optional"
@@ -102,7 +102,7 @@ options:
 ```yaml
 options:
   - raw: false
-    shared: false
+    private: false
     range: "1:2[1-12]"
     selector:
       content: "something"
@@ -117,13 +117,13 @@ options:
 # string assignment
 
 ```pactum
-s#json.name = "Pancake"
+p#json.name = "Pancake"
 ```
 
 ```yaml
 options:
   - raw: false
-    shared: true
+    private: true
     range: "1:3[2-23]"
     selector:
       content: "json.name"
@@ -136,13 +136,13 @@ options:
 # number assignment
 
 ```pactum
-s#json.`option` = 256
+p#json.`option` = 256
 ```
 
 ```yaml
 options:
   - raw: false
-    shared: true
+    private: true
     range: "1:3[2-21]"
     selector:
       content: "json.option"
@@ -161,7 +161,7 @@ options:
 ```yaml
 options:
   - raw: false
-    shared: false
+    private: false
     range: "1:2[2-18]"
     selector:
       content: "message"
@@ -180,7 +180,7 @@ options:
 ```yaml
 options:
   - raw: false
-    shared: false
+    private: false
     range: "1:2[1-16]"
     selector:
       content: "required"
@@ -199,7 +199,7 @@ options:
 ```yaml
 options:
   - raw: false
-    shared: false
+    private: false
     range: "1:2[1-17]"
     selector:
       content: "optional"
@@ -214,7 +214,7 @@ options:
 ```pactum
 #items = ["a" "b" "c"]
 r#items.with.comma = ["a", "b", "c"]
-s#`items` = [
+p#`items` = [
 	"a",
 	"b",
 	"c",
@@ -224,7 +224,7 @@ s#`items` = [
 ```yaml
 options:
   - raw: false
-    shared: false
+    private: false
     range: "1:2[1-22]"
     selector:
       content: "items"
@@ -239,7 +239,7 @@ options:
         - range: "1:19[18-21]"
           data: "c"
   - raw: true
-    shared: true
+    private: false
     range: "2:3[25-59]"
     selector:
       content: "items.with.comma"
@@ -254,7 +254,7 @@ options:
         - range: "2:33[55-58]"
           data: "c"
   - raw: false
-    shared: true
+    private: true
     range: "3:3[63-93]"
     selector:
       content: "items"
@@ -279,7 +279,7 @@ options:
 ```yaml
 options:
   - raw: false
-    shared: false
+    private: false
     range: "1:2[1-36]"
     selector:
       content: "items"
@@ -312,7 +312,7 @@ options:
 ```yaml
 options:
   - raw: false
-    shared: false
+    private: false
     range: "1:2[1-58]"
     selector:
       content: "items"
@@ -357,7 +357,7 @@ r#"com.meshapi:meta" = {
 ```yaml
 options:
   - raw: true
-    shared: true
+    private: false
     range: "1:3[2-201]"
     selector:
       content: "com.meshapi:meta"
@@ -414,7 +414,7 @@ options:
 ```pactum
 r#"com.meshapi" {
 	name = "Pancake"
-	s#required,
+	p#required,
 	id = 12
 }
 ```
@@ -422,14 +422,14 @@ r#"com.meshapi" {
 ```yaml
 options:
   - raw: true
-    shared: true
+    private: false
     range: "1:3[2-59]"
     selector:
       content: "com.meshapi"
       range: "1:3[2-15]"
     block:
       - raw: false
-        shared: false
+        private: false
         range: "2:2[19-35]"
         selector:
           content: "name"
@@ -438,7 +438,7 @@ options:
           range: "2:9[26-35]"
           data: "Pancake"
       - raw: false
-        shared: true
+        private: true
         range: "3:4[39-47]"
         selector:
           content: "required"
@@ -447,7 +447,7 @@ options:
           range: "3:4[39-47]"
           data: true
       - raw: false
-        shared: false
+        private: false
         range: "4:2[50-57]"
         selector:
           content: "id"
@@ -460,7 +460,7 @@ options:
 # root level block
 
 ```pactum
-s# {
+p# {
 	name = "Pancake"
 	r#required,
 	id = 12
@@ -470,14 +470,14 @@ s# {
 ```yaml
 options:
   - raw: false
-    shared: true
+    private: true
     range: "1:4[3-46]"
     selector:
       content: ""
       range: "0:0[0-0]"
     block:
       - raw: false
-        shared: false
+        private: false
         range: "2:2[6-22]"
         selector:
           content: "name"
@@ -486,7 +486,7 @@ options:
           range: "2:9[13-22]"
           data: "Pancake"
       - raw: true
-        shared: true
+        private: false
         range: "3:4[26-34]"
         selector:
           content: "required"
@@ -495,7 +495,7 @@ options:
           range: "3:4[26-34]"
           data: true
       - raw: false
-        shared: false
+        private: false
         range: "4:2[37-44]"
         selector:
           content: "id"

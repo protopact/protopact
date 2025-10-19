@@ -12,10 +12,10 @@ const FatalError = error{NestingDepthReached} || Allocator.Error;
 
 const OptionModifiers = struct {
     raw: bool,
-    shared: bool,
+    private: bool,
 
     fn default() OptionModifiers {
-        return .{ .raw = false, .shared = false };
+        return .{ .raw = false, .private = false };
     }
 };
 
@@ -208,6 +208,7 @@ const Context = struct {
     const TokenKindTag = std.meta.Tag(scanner.TokenKind);
 
     allocator: Allocator,
+    transientAllocator: std.mem.Allocator,
     it: TokenIterator,
     errors: ErrorList,
     scopeDelimiters: ScopeDelimiterList,
@@ -228,7 +229,7 @@ const Context = struct {
         .Import,
         .RawHash,
         .Hash,
-        .SharedHash,
+        .PrivateHash,
         .Const,
         .Enum,
         .Message,
@@ -249,7 +250,7 @@ const Context = struct {
     const EnumBodyRecoveryPoints: []const TokenKindTag = &.{
         .Hash,
         .RawHash,
-        .SharedHash,
+        .PrivateHash,
         .Identifier,
         .Documentation,
         .Comma,
@@ -261,7 +262,7 @@ const Context = struct {
         .Documentation,
         .Hash,
         .RawHash,
-        .SharedHash,
+        .PrivateHash,
         .OneOf,
         .Comma,
     };
@@ -271,14 +272,15 @@ const Context = struct {
         .Documentation,
         .Hash,
         .RawHash,
-        .SharedHash,
+        .PrivateHash,
         .Comma,
         .Semicolon,
     };
 
-    fn init(allocator: Allocator, tokens: []const scanner.Token) Context {
+    fn init(allocator: Allocator, transientAllocator: Allocator, tokens: []const scanner.Token) Context {
         return .{
             .allocator = allocator,
+            .transientAllocator = transientAllocator,
             .it = TokenIterator.init(tokens),
             .errors = ErrorList.init(),
             .scopeDelimiters = ScopeDelimiterList.init(),
@@ -308,7 +310,7 @@ const Context = struct {
             (switch (token.kind) {
                 .Pact => self.processPact(),
                 .Import => self.processImport(),
-                .RawHash, .Hash, .SharedHash => option: {
+                .RawHash, .Hash, .PrivateHash => option: {
                     // NB: Special case where we need to consume the first token itself.
                     self.it.i -= 1;
                     break :option self.processOption();
@@ -450,13 +452,13 @@ const Context = struct {
             return self.recover(err, EnumEntryRecoveryPoints, false);
         };
 
-        var options = StackFallbackArray(ast.OptionAssignmentNode, 20).init(self.allocator);
-        var variants = StackFallbackArray(ast.EnumVariant, 20).init(self.allocator);
+        var options = StackFallbackArray(ast.OptionAssignmentNode, 20).init(self.transientAllocator);
+        var variants = StackFallbackArray(ast.EnumVariant, 20).init(self.transientAllocator);
         while (true) {
             const token = try self.peekNextOrError();
             switch (token.kind) {
                 .Comment => self.consume(),
-                .Hash, .RawHash, .SharedHash => if (self.parseOption(false, null)) |v| {
+                .Hash, .RawHash, .PrivateHash => if (self.parseOption(false, null)) |v| {
                     try options.append(v.data);
                     if (v.scopeExited) break;
                 } else |err| if (try self.recoverExitsScope(err, EnumBodyRecoveryPoints, true))
@@ -527,7 +529,7 @@ const Context = struct {
                 if (std.math.cast(u32, valueToken.kind.Integer)) |tag| {
                     value = tag;
                 } else self.addError(SyntaxError.enumVariantNumericalError(&valueToken));
-            } else |err| if (try self.recoverExitsScope(err, &.{ .RawHash, .Hash, .SharedHash, .Comma }, true)) {
+            } else |err| if (try self.recoverExitsScope(err, &.{ .RawHash, .Hash, .PrivateHash, .Comma }, true)) {
                 return .initScopeExited(
                     try self.buildEnumVariant(nameToken, null, documentation, &.{}),
                 );
@@ -557,17 +559,17 @@ const Context = struct {
             return self.recover(err, MessageEntryRecoveryPoints, false);
         };
 
-        var options = StackFallbackArray(ast.OptionAssignmentNode, 20).init(self.allocator);
-        var fields = StackFallbackArray(ast.Field, 40).init(self.allocator);
-        var embeddedMessages = StackFallbackArray(ast.Selector, 10).init(self.allocator);
-        var oneOfGroups = StackFallbackArray(ast.OneOf, 10).init(self.allocator);
+        var options = StackFallbackArray(ast.OptionAssignmentNode, 20).init(self.transientAllocator);
+        var fields = StackFallbackArray(ast.Field, 40).init(self.transientAllocator);
+        var embeddedMessages = StackFallbackArray(ast.Selector, 10).init(self.transientAllocator);
+        var oneOfGroups = StackFallbackArray(ast.OneOf, 10).init(self.transientAllocator);
 
         while (true) {
             const token = try self.peekNextOrError();
             switch (token.kind) {
                 .Comment => self.consume(),
                 .Documentation => try self.captureDocumentationGroup(),
-                .Hash, .RawHash, .SharedHash => if (self.parseOption(false, null)) |v| {
+                .Hash, .RawHash, .PrivateHash => if (self.parseOption(false, null)) |v| {
                     try options.append(v.data);
                     if (v.scopeExited) break;
                 } else |err| if (try self.recoverExitsScope(err, MessageBodyRecoveryPoints, true))
@@ -679,7 +681,7 @@ const Context = struct {
                     }
                     tag = tagValue;
                 } else self.addError(SyntaxError.fieldTagNumericalError(&tagToken));
-            } else |err| if (try self.recoverExitsScope(err, &.{ .Hash, .RawHash, .SharedHash, .Comma }, true)) {
+            } else |err| if (try self.recoverExitsScope(err, &.{ .Hash, .RawHash, .PrivateHash, .Comma }, true)) {
                 return .initScopeExited(
                     try self.buildField(nameToken, documentation, &.{}, tag, dataType.data, oneOfGroupIndex),
                 );
@@ -756,13 +758,13 @@ const Context = struct {
     ) Error!ParseResult(struct { options: []const ast.OptionAssignmentNode }) {
         const OneOfBodyRecoveryPoints: []const TokenKindTag = &.{
             .Hash,
-            .SharedHash,
+            .PrivateHash,
             .RawHash,
             .Comma,
             .Identifier,
         };
         _ = try self.consumeRequiredToken(.LeftCurlyBrace, "{");
-        var options = StackFallbackArray(ast.OptionAssignmentNode, 20).init(self.allocator);
+        var options = StackFallbackArray(ast.OptionAssignmentNode, 20).init(self.transientAllocator);
         const currentScope = self.scopeDelimiterContext();
 
         const scopeExited = blk: {
@@ -775,7 +777,7 @@ const Context = struct {
                         if (v.scopeExited) break :blk true;
                     } else |err| if (try self.recoverExitsScope(err, &.{.Comma}, true))
                         break :blk true,
-                    .Hash, .RawHash, .SharedHash => if (self.parseOption(false, null)) |v| {
+                    .Hash, .RawHash, .PrivateHash => if (self.parseOption(false, null)) |v| {
                         try options.append(v.data);
                         if (v.scopeExited) break :blk true;
                     } else |err| if (try self.recoverExitsScope(err, OneOfBodyRecoveryPoints, true))
@@ -806,7 +808,7 @@ const Context = struct {
     fn parseOneOfBodyType(
         self: *Context,
     ) Error!ParseResult(ast.Field.OneOfTypeInfo) {
-        var fields = StackFallbackArray(ast.Field, 40).init(self.allocator);
+        var fields = StackFallbackArray(ast.Field, 40).init(self.transientAllocator);
         return if (self.processOneOfBody(null, &fields)) |result| .initValue(.{
             .fields = try fields.toOwnedSlice(self.allocator),
             .options = result.data.options,
@@ -817,13 +819,13 @@ const Context = struct {
         self: *Context,
         comptime terminationToken: TokenKindTag,
     ) Error!ParseResult([]ast.OptionAssignmentNode) {
-        const RecoveryPoints: []const TokenKindTag = &.{ terminationToken, .RawHash, .Hash, .SharedHash };
+        const RecoveryPoints: []const TokenKindTag = &.{ terminationToken, .RawHash, .Hash, .PrivateHash };
 
         if (self.nextTokenIs(.LeftCurlyBrace)) {
             return self.parseOptionBlock();
         }
 
-        var values = StackFallbackArray(ast.OptionAssignmentNode, 10).init(self.allocator);
+        var values = StackFallbackArray(ast.OptionAssignmentNode, 10).init(self.transientAllocator);
         const scopeExited = blk: {
             while (true) {
                 const token = self.it.peek(1) orelse break :blk false;
@@ -862,7 +864,7 @@ const Context = struct {
             targetSet.insert(try self.parseOptionTarget());
         }
 
-        var fields = StackFallbackArray(ast.Field, 40).init(self.allocator);
+        var fields = StackFallbackArray(ast.Field, 40).init(self.transientAllocator);
 
         while (true) {
             const nextToken = self.it.peek(1) orelse {
@@ -925,14 +927,14 @@ const Context = struct {
         _ = self.consumeRequiredToken(.LeftCurlyBrace, "") catch |err|
             return self.recover(err, InterfaceRecoveryPoints, false);
 
-        var funcs = StackFallbackArray(ast.Func, 40).init(self.allocator);
-        var options = StackFallbackArray(ast.OptionAssignmentNode, 20).init(self.allocator);
+        var funcs = StackFallbackArray(ast.Func, 40).init(self.transientAllocator);
+        var options = StackFallbackArray(ast.OptionAssignmentNode, 20).init(self.transientAllocator);
 
         while (true) {
             const token = try self.peekNextOrError();
             switch (token.kind) {
                 .Semicolon, .Comma, .Comment => self.consume(),
-                .Hash, .SharedHash, .RawHash => if (self.parseOption(false, null)) |v| {
+                .Hash, .PrivateHash, .RawHash => if (self.parseOption(false, null)) |v| {
                     try options.append(v.data);
                     if (v.scopeExited) break;
                 } else |err| if (try self.recoverExitsScope(err, InterfaceBodyRecoveryPoints, true))
@@ -1097,7 +1099,7 @@ const Context = struct {
             const start = self.currentPosition();
             const blockOptions = try self.parseOptionBlock();
             const rootOption = ast.OptionAssignmentNode{
-                .shared = modifiers.shared,
+                .private = modifiers.private,
                 .raw = modifiers.raw,
                 .selector = ast.Selector.init(&.{}, ast.Range.empty()),
                 .range = ast.Range{ .start = start, .endOffset = self.it.currentAssumeSafe().endOffset() },
@@ -1130,11 +1132,11 @@ const Context = struct {
             },
             .RawHash => {
                 self.consume();
-                return .{ .raw = true, .shared = true };
+                return .{ .raw = true, .private = false };
             },
-            .SharedHash => {
+            .PrivateHash => {
                 self.consume();
-                return .{ .shared = true, .raw = false };
+                return .{ .private = true, .raw = false };
             },
             else => if (needsHashPrefix) {
                 self.addError(SyntaxError.expectToken(&token, "option setting modifier or end of statement"));
@@ -1175,7 +1177,7 @@ const Context = struct {
                 const currentScope = self.scopeDelimiterContext();
                 return if (self.parseOptionBlock()) |v| .initValue(
                     .{
-                        .shared = modifiers.shared,
+                        .private = modifiers.private,
                         .raw = modifiers.raw,
                         .selector = selector,
                         .value = .{ .Group = v.data },
@@ -1192,7 +1194,7 @@ const Context = struct {
                 const currentScope = self.scopeDelimiterContext();
                 return if (self.parseValue()) |v| .initValue(
                     .{
-                        .shared = modifiers.shared,
+                        .private = modifiers.private,
                         .raw = modifiers.raw,
                         .selector = selector,
                         .value = .{ .Leaf = v.data },
@@ -1209,7 +1211,7 @@ const Context = struct {
 
         const range = ast.Range{ .start = start, .endOffset = selector.range.endOffset };
         return .initOk(.{
-            .shared = modifiers.shared,
+            .private = modifiers.private,
             .raw = modifiers.raw,
             .selector = selector,
             .value = .{
@@ -1229,9 +1231,9 @@ const Context = struct {
             .String,
             .Hash,
             .RawHash,
-            .SharedHash,
+            .PrivateHash,
         };
-        var values = StackFallbackArray(ast.OptionAssignmentNode, 20).init(self.allocator);
+        var values = StackFallbackArray(ast.OptionAssignmentNode, 20).init(self.transientAllocator);
         _ = try self.consumeRequiredToken(.LeftCurlyBrace, "{");
         const currentScope = self.scopeDelimiterContext();
         const scopeExited = blk: {
@@ -1280,7 +1282,7 @@ const Context = struct {
             .Comma,
         };
         try self.pushScopeDelimiter(.Bracket);
-        var values = StackFallbackArray(ast.RangedValue, 20).init(self.allocator);
+        var values = StackFallbackArray(ast.RangedValue, 20).init(self.transientAllocator);
         const start = self.it.currentAssumeSafe().position;
         const currentScope = self.scopeDelimiterContext();
 
@@ -1320,7 +1322,7 @@ const Context = struct {
     fn parseValueObject(self: *Context) Error!ParseResult(ast.RangedValue) {
         const ObjectRecoveryPoints: []const TokenKindTag = &.{ .String, .Comma };
         try self.pushScopeDelimiter(.CurlyBrace);
-        var values = StackFallbackArray(ast.Entry, 20).init(self.allocator);
+        var values = StackFallbackArray(ast.Entry, 20).init(self.transientAllocator);
         const start = self.it.currentAssumeSafe().position;
         const currentScope = self.scopeDelimiterContext();
 
@@ -1585,12 +1587,6 @@ const Context = struct {
         const errors = try self.allocator.alloc(SyntaxError, self.errors.len);
         @memcpy(errors, self.errors.slice());
         return errors;
-    }
-
-    /// addErrorTerminal always returns an error. It is a convenient way to add error and then return UnexpectedToken.
-    inline fn addErrorTerminal(self: *Context, err: SyntaxError) Error!void {
-        self.addError(err);
-        return Error.UnexpectedToken;
     }
 
     inline fn consumeRequiredToken(
@@ -1922,14 +1918,21 @@ pub const Result = struct {
     }
 };
 
-pub fn parse(allocator: Allocator, content: []const u8) ParseError!Result {
+pub const Options = struct {
+    transientAllocator: ?std.mem.Allocator = null,
+};
+
+pub fn parse(allocator: Allocator, content: []const u8, opts: Options) ParseError!Result {
     var resultAllocator = std.heap.ArenaAllocator.init(allocator);
     errdefer resultAllocator.deinit();
+
+    var transientAllocator = std.heap.ArenaAllocator.init(opts.transientAllocator orelse allocator);
+    defer transientAllocator.deinit();
 
     var scanResult = try scanner.tokenize(allocator, content);
     defer scanResult.deinit();
 
-    var ctx = Context.init(resultAllocator.allocator(), scanResult.tokens);
+    var ctx = Context.init(resultAllocator.allocator(), transientAllocator.allocator(), scanResult.tokens);
     for (scanResult.errors) |scanError| {
         ctx.addError(SyntaxError{
             .message = scanError.message,

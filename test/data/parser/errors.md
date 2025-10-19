@@ -31,7 +31,7 @@ messages:
         type: "string"
         options:
           - raw: false
-            shared: false
+            private: false
             selector: "required"
             value: true
 
@@ -441,15 +441,15 @@ constants:
         - 2
     options:
       - raw: false
-        shared: false
+        private: false
         selector: "required"
         value: true
       - raw: false
-        shared: false
+        private: false
         selector: "pancake"
         value: true
       - raw: false
-        shared: false
+        private: false
         selector: "optional"
         value: true
 interfaces:
@@ -617,36 +617,36 @@ enums:
       - name: "Unknown"
         options:
           - raw: false
-            shared: false
+            private: false
             selector: "required"
             value: true
       - name: "Two"
         value: 3
         options:
           - raw: false
-            shared: false
+            private: false
             selector: "optional"
             block:
               - raw: false
-                shared: false
+                private: false
                 selector: "some_flag"
                 value: true
               - raw: false
-                shared: false
+                private: false
                 selector: "bad"
                 value: true
       - name: "Three"
         options:
           - raw: false
-            shared: false
+            private: false
             selector: "optional"
             block:
               - raw: false
-                shared: false
+                private: false
                 selector: "invalid"
                 value: true
               - raw: false
-                shared: false
+                private: false
                 selector: "some_option"
                 value: true
 messages:
@@ -740,11 +740,11 @@ messages:
   - name: "User"
     options:
       - raw: false
-        shared: false
+        private: false
         selector: "some_option"
         block:
           - raw: false
-            shared: false
+            private: false
             selector: "value"
             value:
               - 1
@@ -788,7 +788,7 @@ messages:
       - name: "user_change"
         options:
           - raw: false
-            shared: false
+            private: false
             selector: "required"
             value: true
     fields:
@@ -828,7 +828,7 @@ messages:
   - name: "Name"
     options:
       - raw: false
-        shared: false
+        private: false
         selector: "required"
         value: true
     fields:
@@ -883,7 +883,7 @@ messages:
   - name: "A"
     options:
       - raw: false
-        shared: false
+        private: false
         selector: "a.b"
         value:
           key: "data"

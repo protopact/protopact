@@ -6,8 +6,8 @@ const Range = code.Range;
 /// AssignmentNode describes an option setting, since options can be blocks or a single assignment
 /// the value can either be a leaf or a tree.
 pub const AssignmentNode = struct {
-    /// shared indicates that the assignment can be marked as public facing or external.
-    shared: bool,
+    /// indicates that the assignment is marked as private or internally valuable.
+    private: bool,
 
     /// raw indicates that the assignment is a loose and raw key.
     raw: bool,

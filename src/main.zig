@@ -4,7 +4,7 @@ const parser = @import("parser.zig");
 const astcoder = @import("astcoder.zig");
 
 pub fn main() !void {
-    const allocator = std.heap.smp_allocator;
+    const allocator = std.heap.page_allocator;
 
     var it = try std.process.argsWithAllocator(allocator);
     _ = it.skip();
@@ -14,11 +14,17 @@ pub fn main() !void {
         return;
     };
 
+    const quiet = if (it.next()) |x| std.mem.eql(u8, x, "-q") else false;
+
     const data = try std.fs.cwd().readFileAlloc(allocator, fileName, std.math.maxInt(usize));
 
     const now = std.time.microTimestamp();
-    const parseResult = try parser.parse(allocator, data);
+    const parseResult = try parser.parse(allocator, data, .{ .transientAllocator = std.heap.smp_allocator });
     const diff = std.time.microTimestamp() - now;
+    if (quiet) {
+        std.debug.print("\ntook {d}ms\n", .{@as(f32, @floatFromInt(diff)) / 1000.0});
+        return;
+    }
     var marshaler = astcoder.YamlMarshaller{
         .excludeZeroValues = true,
         .includeConstants = true,

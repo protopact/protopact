@@ -49,7 +49,7 @@ option_definitions:
         tag: 1
         options:
           - raw: false
-            shared: false
+            private: false
             range: "2:26[60-68]"
             selector:
               content: "optional"

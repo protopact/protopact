@@ -18,10 +18,10 @@ interfaces:
 
 ```pactum
 interface UserService {
-	s#openapi.tags = ["tag one" "tag two"]
+	p#openapi.tags = ["tag one" "tag two"]
 
 	FuncWithoutParamWithSemicolon();
-	FuncWithoutParamWithOptionsSemicolon() s#api.deprecated;
+	FuncWithoutParamWithOptionsSemicolon() p#api.deprecated;
 	FuncWithoutParamWithOptionsBlock() {}
 	FuncWithoutParamWithOptionsBlockAndSemicolon() {};
 }
@@ -34,7 +34,7 @@ interfaces:
     range: "1:11[10-249]"
     options:
       - raw: false
-        shared: true
+        private: true
         range: "2:4[27-63]"
         selector:
           content: "openapi.tags"
@@ -60,7 +60,7 @@ interfaces:
         output: null
         options:
           - raw: false
-            shared: true
+            private: true
             range: "5:43[141-155]"
             selector:
               content: "api.deprecated"
@@ -87,7 +87,7 @@ interfaces:
 ```pactum
 interface UserService {
 	FuncWithInput(some_pact.Input) = 1;
-	FuncWithStreamingInputEmptyOutput(stream some_pact.Input) -> () = 2 s#api.deprecated;
+	FuncWithStreamingInputEmptyOutput(stream some_pact.Input) -> () = 2 p#api.deprecated;
 	FuncWithOutputArgs(stream some_pact.Input) -> some_pact.Output = 3 {};
 	FuncWithStreamingArgs(stream some_pact.Input) -> stream some_pact.Output = 4 {}
 }
@@ -121,7 +121,7 @@ interfaces:
         output: null
         options:
           - raw: false
-            shared: true
+            private: true
             range: "3:72[132-146]"
             selector:
               content: "api.deprecated"
