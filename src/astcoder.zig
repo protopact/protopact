@@ -142,8 +142,8 @@ const Context = struct {
             try self.writer.print(" {any}", .{option.raw});
             self.incrIndent();
             defer self.decrIndent();
-            try self.writeKey("shared");
-            try self.writer.print(" {any}", .{option.shared});
+            try self.writeKey("private");
+            try self.writer.print(" {any}", .{option.private});
             if (self.includeRange) {
                 try self.writeKey("range");
                 try self.writeRange(option.range);

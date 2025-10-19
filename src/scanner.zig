@@ -59,7 +59,7 @@ pub const TokenKind = union(enum) {
 
     Hash,
     RawHash,
-    SharedHash,
+    PrivateHash,
     Colon,
     Semicolon,
     Dot,
@@ -395,14 +395,14 @@ const Context = struct {
                 continue;
             } orelse return;
             switch (char) {
-                'r', 's' => {
+                'r', 'p' => {
                     switch (self.peekAscii() orelse break) {
                         '#' => {
                             self.consumeAscii(); // consume the #
                             if (char == 'r') {
                                 try self.addToken(.RawHash);
                             } else {
-                                try self.addToken(.SharedHash);
+                                try self.addToken(.PrivateHash);
                             }
                             continue;
                         },

@@ -45,7 +45,7 @@ messages:
 
 ```pactum
 message User {
-	s#openapi {
+	p#openapi {
 		description = "You know, a user"
 	}
 
@@ -66,14 +66,14 @@ messages:
         range: "6:8[74-78]"
     options:
       - raw: false
-        shared: true
+        private: true
         range: "2:4[18-65]"
         selector:
           content: "openapi"
           range: "2:4[18-25]"
         block:
           - raw: false
-            shared: false
+            private: false
             range: "3:3[30-62]"
             selector:
               content: "description"
@@ -96,7 +96,7 @@ messages:
         tag: null
         options:
           - raw: false
-            shared: false
+            private: false
             range: "9:12[108-116]"
             selector:
               content: "optional"
@@ -110,7 +110,7 @@ messages:
 
 ```pactum
 message User {
-	s#openapi.external_doc = "https://github.com/meshapi"
+	p#openapi.external_doc = "https://github.com/meshapi"
 	embed Meta,
 	embed WithoutComma,
 
@@ -142,7 +142,7 @@ messages:
         range: "4:8[90-102]"
     options:
       - raw: false
-        shared: true
+        private: true
         range: "2:4[18-69]"
         selector:
           content: "openapi.external_doc"
@@ -155,7 +155,7 @@ messages:
         range: "8:2[152-229]"
         options:
           - raw: false
-            shared: false
+            private: false
             range: "9:6[176-191]"
             selector:
               content: "some_option"
@@ -177,7 +177,7 @@ messages:
         tag: null
         options:
           - raw: false
-            shared: false
+            private: false
             range: "7:21[141-149]"
             selector:
               content: "optional"
@@ -197,7 +197,7 @@ messages:
         type: "oneof"
         oneof_options:
           - raw: false
-            shared: false
+            private: false
             range: "14:4[257-278]"
             selector:
               content: "some_other_option"

@@ -12,10 +12,10 @@ const FatalError = error{NestingDepthReached} || Allocator.Error;
 
 const OptionModifiers = struct {
     raw: bool,
-    shared: bool,
+    private: bool,
 
     fn default() OptionModifiers {
-        return .{ .raw = false, .shared = false };
+        return .{ .raw = false, .private = false };
     }
 };
 
@@ -229,7 +229,7 @@ const Context = struct {
         .Import,
         .RawHash,
         .Hash,
-        .SharedHash,
+        .PrivateHash,
         .Const,
         .Enum,
         .Message,
@@ -250,7 +250,7 @@ const Context = struct {
     const EnumBodyRecoveryPoints: []const TokenKindTag = &.{
         .Hash,
         .RawHash,
-        .SharedHash,
+        .PrivateHash,
         .Identifier,
         .Documentation,
         .Comma,
@@ -262,7 +262,7 @@ const Context = struct {
         .Documentation,
         .Hash,
         .RawHash,
-        .SharedHash,
+        .PrivateHash,
         .OneOf,
         .Comma,
     };
@@ -272,7 +272,7 @@ const Context = struct {
         .Documentation,
         .Hash,
         .RawHash,
-        .SharedHash,
+        .PrivateHash,
         .Comma,
         .Semicolon,
     };
@@ -310,7 +310,7 @@ const Context = struct {
             (switch (token.kind) {
                 .Pact => self.processPact(),
                 .Import => self.processImport(),
-                .RawHash, .Hash, .SharedHash => option: {
+                .RawHash, .Hash, .PrivateHash => option: {
                     // NB: Special case where we need to consume the first token itself.
                     self.it.i -= 1;
                     break :option self.processOption();
@@ -458,7 +458,7 @@ const Context = struct {
             const token = try self.peekNextOrError();
             switch (token.kind) {
                 .Comment => self.consume(),
-                .Hash, .RawHash, .SharedHash => if (self.parseOption(false, null)) |v| {
+                .Hash, .RawHash, .PrivateHash => if (self.parseOption(false, null)) |v| {
                     try options.append(v.data);
                     if (v.scopeExited) break;
                 } else |err| if (try self.recoverExitsScope(err, EnumBodyRecoveryPoints, true))
@@ -529,7 +529,7 @@ const Context = struct {
                 if (std.math.cast(u32, valueToken.kind.Integer)) |tag| {
                     value = tag;
                 } else self.addError(SyntaxError.enumVariantNumericalError(&valueToken));
-            } else |err| if (try self.recoverExitsScope(err, &.{ .RawHash, .Hash, .SharedHash, .Comma }, true)) {
+            } else |err| if (try self.recoverExitsScope(err, &.{ .RawHash, .Hash, .PrivateHash, .Comma }, true)) {
                 return .initScopeExited(
                     try self.buildEnumVariant(nameToken, null, documentation, &.{}),
                 );
@@ -569,7 +569,7 @@ const Context = struct {
             switch (token.kind) {
                 .Comment => self.consume(),
                 .Documentation => try self.captureDocumentationGroup(),
-                .Hash, .RawHash, .SharedHash => if (self.parseOption(false, null)) |v| {
+                .Hash, .RawHash, .PrivateHash => if (self.parseOption(false, null)) |v| {
                     try options.append(v.data);
                     if (v.scopeExited) break;
                 } else |err| if (try self.recoverExitsScope(err, MessageBodyRecoveryPoints, true))
@@ -681,7 +681,7 @@ const Context = struct {
                     }
                     tag = tagValue;
                 } else self.addError(SyntaxError.fieldTagNumericalError(&tagToken));
-            } else |err| if (try self.recoverExitsScope(err, &.{ .Hash, .RawHash, .SharedHash, .Comma }, true)) {
+            } else |err| if (try self.recoverExitsScope(err, &.{ .Hash, .RawHash, .PrivateHash, .Comma }, true)) {
                 return .initScopeExited(
                     try self.buildField(nameToken, documentation, &.{}, tag, dataType.data, oneOfGroupIndex),
                 );
@@ -758,7 +758,7 @@ const Context = struct {
     ) Error!ParseResult(struct { options: []const ast.OptionAssignmentNode }) {
         const OneOfBodyRecoveryPoints: []const TokenKindTag = &.{
             .Hash,
-            .SharedHash,
+            .PrivateHash,
             .RawHash,
             .Comma,
             .Identifier,
@@ -777,7 +777,7 @@ const Context = struct {
                         if (v.scopeExited) break :blk true;
                     } else |err| if (try self.recoverExitsScope(err, &.{.Comma}, true))
                         break :blk true,
-                    .Hash, .RawHash, .SharedHash => if (self.parseOption(false, null)) |v| {
+                    .Hash, .RawHash, .PrivateHash => if (self.parseOption(false, null)) |v| {
                         try options.append(v.data);
                         if (v.scopeExited) break :blk true;
                     } else |err| if (try self.recoverExitsScope(err, OneOfBodyRecoveryPoints, true))
@@ -819,7 +819,7 @@ const Context = struct {
         self: *Context,
         comptime terminationToken: TokenKindTag,
     ) Error!ParseResult([]ast.OptionAssignmentNode) {
-        const RecoveryPoints: []const TokenKindTag = &.{ terminationToken, .RawHash, .Hash, .SharedHash };
+        const RecoveryPoints: []const TokenKindTag = &.{ terminationToken, .RawHash, .Hash, .PrivateHash };
 
         if (self.nextTokenIs(.LeftCurlyBrace)) {
             return self.parseOptionBlock();
@@ -934,7 +934,7 @@ const Context = struct {
             const token = try self.peekNextOrError();
             switch (token.kind) {
                 .Semicolon, .Comma, .Comment => self.consume(),
-                .Hash, .SharedHash, .RawHash => if (self.parseOption(false, null)) |v| {
+                .Hash, .PrivateHash, .RawHash => if (self.parseOption(false, null)) |v| {
                     try options.append(v.data);
                     if (v.scopeExited) break;
                 } else |err| if (try self.recoverExitsScope(err, InterfaceBodyRecoveryPoints, true))
@@ -1099,7 +1099,7 @@ const Context = struct {
             const start = self.currentPosition();
             const blockOptions = try self.parseOptionBlock();
             const rootOption = ast.OptionAssignmentNode{
-                .shared = modifiers.shared,
+                .private = modifiers.private,
                 .raw = modifiers.raw,
                 .selector = ast.Selector.init(&.{}, ast.Range.empty()),
                 .range = ast.Range{ .start = start, .endOffset = self.it.currentAssumeSafe().endOffset() },
@@ -1132,11 +1132,11 @@ const Context = struct {
             },
             .RawHash => {
                 self.consume();
-                return .{ .raw = true, .shared = true };
+                return .{ .raw = true, .private = false };
             },
-            .SharedHash => {
+            .PrivateHash => {
                 self.consume();
-                return .{ .shared = true, .raw = false };
+                return .{ .private = true, .raw = false };
             },
             else => if (needsHashPrefix) {
                 self.addError(SyntaxError.expectToken(&token, "option setting modifier or end of statement"));
@@ -1177,7 +1177,7 @@ const Context = struct {
                 const currentScope = self.scopeDelimiterContext();
                 return if (self.parseOptionBlock()) |v| .initValue(
                     .{
-                        .shared = modifiers.shared,
+                        .private = modifiers.private,
                         .raw = modifiers.raw,
                         .selector = selector,
                         .value = .{ .Group = v.data },
@@ -1194,7 +1194,7 @@ const Context = struct {
                 const currentScope = self.scopeDelimiterContext();
                 return if (self.parseValue()) |v| .initValue(
                     .{
-                        .shared = modifiers.shared,
+                        .private = modifiers.private,
                         .raw = modifiers.raw,
                         .selector = selector,
                         .value = .{ .Leaf = v.data },
@@ -1211,7 +1211,7 @@ const Context = struct {
 
         const range = ast.Range{ .start = start, .endOffset = selector.range.endOffset };
         return .initOk(.{
-            .shared = modifiers.shared,
+            .private = modifiers.private,
             .raw = modifiers.raw,
             .selector = selector,
             .value = .{
@@ -1231,7 +1231,7 @@ const Context = struct {
             .String,
             .Hash,
             .RawHash,
-            .SharedHash,
+            .PrivateHash,
         };
         var values = StackFallbackArray(ast.OptionAssignmentNode, 20).init(self.transientAllocator);
         _ = try self.consumeRequiredToken(.LeftCurlyBrace, "{");
