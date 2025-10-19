@@ -1587,12 +1587,6 @@ const Context = struct {
         return errors;
     }
 
-    /// addErrorTerminal always returns an error. It is a convenient way to add error and then return UnexpectedToken.
-    inline fn addErrorTerminal(self: *Context, err: SyntaxError) Error!void {
-        self.addError(err);
-        return Error.UnexpectedToken;
-    }
-
     inline fn consumeRequiredToken(
         self: *Context,
         comptime tag: TokenKindTag,

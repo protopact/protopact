@@ -20,7 +20,7 @@ pub fn StackArray(T: type, comptime count: usize) type {
             self.len += 1;
         }
 
-        pub fn slice(self: Self) []const T {
+        pub inline fn slice(self: Self) []const T {
             return self.buffer[0..self.len];
         }
 
