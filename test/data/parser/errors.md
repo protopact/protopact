@@ -29,6 +29,7 @@ messages:
     fields:
       - name: "name"
         type: "string"
+        nullable: false
         options:
           - raw: false
             private: false
@@ -716,8 +717,10 @@ messages:
     fields:
       - name: "name"
         type: "string"
+        nullable: false
       - name: "age"
         type: "i32"
+        nullable: false
 
 3:5[36] expected option setting modifier or end of statement @literal=age
 ```
@@ -751,8 +754,10 @@ messages:
     fields:
       - name: "name"
         type: "string"
+        nullable: false
       - name: "age"
         type: "i32"
+        nullable: false
 
 7:5[91] expected value @literal=}
 ```
@@ -794,14 +799,18 @@ messages:
     fields:
       - name: "id"
         type: "string"
+        nullable: false
       - name: "name"
         type: "string"
+        nullable: false
         oneof_group_index: 0
       - name: "age"
         type: "string"
+        nullable: false
         oneof_group_index: 0
       - name: "new_field"
         type: "i32"
+        nullable: false
         oneof_group_index: 0
 
 4:15[65] expected oneof group name @literal={
@@ -834,8 +843,10 @@ messages:
     fields:
       - name: "age"
         type: "i32"
+        nullable: false
       - name: "field"
         type: "i32"
+        nullable: false
 
 3:15[39] expected field type @literal="some type"
 5:5[79] expected option setting modifier or end of statement @literal=another_bad_field_with_no_comma
@@ -860,8 +871,10 @@ messages:
     fields:
       - name: "name"
         type: "string"
+        nullable: false
       - name: "some_field"
         type: "oneof"
+        nullable: false
 
 6:5[106] expected > @literal=}
 7:1[108] expected option setting modifier or end of statement @literal=)

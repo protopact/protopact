@@ -441,6 +441,9 @@ const Context = struct {
             try self.writer.writeAll(LiteralNone);
         }
 
+        try self.writeKey("nullable");
+        try self.writer.print(" {any}", .{field.nullable});
+
         if (field.oneOfGroupIndex) |index| {
             try self.writeKey("oneof_group_index");
             try self.writer.print(" {d}", .{index});

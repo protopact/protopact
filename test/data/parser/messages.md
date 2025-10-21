@@ -38,6 +38,7 @@ messages:
         type: "string"
         type_range: "2:9[23-29]"
         tag: null
+        nullable: false
         options:
 ```
 
@@ -88,12 +89,14 @@ messages:
         type: "string"
         type_range: "8:9[89-95]"
         tag: null
+        nullable: false
         options:
       - name: "age"
         range: "9:2[98-116]"
         type: "u32"
         type_range: "9:7[103-106]"
         tag: null
+        nullable: false
         options:
           - raw: false
             private: false
@@ -169,12 +172,14 @@ messages:
         type: "string"
         type_range: "6:9[113-119]"
         tag: null
+        nullable: false
         options:
       - name: "work"
         range: "7:2[122-149]"
         type: "workv1.Work"
         type_range: "7:8[128-139]"
         tag: null
+        nullable: false
         options:
           - raw: false
             private: false
@@ -190,6 +195,7 @@ messages:
         type: "wellknown.Timestamp"
         type_range: "11:15[207-226]"
         tag: null
+        nullable: false
         oneof_group_index: 0
         options:
       - name: "another_field"
@@ -211,14 +217,60 @@ messages:
             type: "list[item=wellknown.Timestamp]"
             type_range: "16:11[290-315]"
             tag: null
+            nullable: false
             options:
           - name: "map_field"
             range: "17:3[319-353]"
             type: "map[key=string, value=types.User]"
             type_range: "17:14[330-353]"
             tag: null
+            nullable: false
             options:
         type_range: "13:17[246-356]"
         tag: null
+        nullable: false
         options:
+```
+
+# Nullable Fields
+
+```pactum
+message Request {
+    id: string,
+    updateSomething: ?string = 1000 #json.ignore,
+}
+```
+
+```yaml
+options:
+messages:
+  - name: "Request"
+    range: "1:9[8-85]"
+    embedded_messages:
+    options:
+    oneof_groups:
+    fields:
+      - name: "id"
+        range: "2:5[22-32]"
+        type: "string"
+        type_range: "2:9[26-32]"
+        tag: null
+        nullable: false
+        options:
+      - name: "updateSomething"
+        range: "3:5[38-82]"
+        type: "string"
+        type_range: "3:23[56-62]"
+        tag: 1000
+        nullable: true
+        options:
+          - raw: false
+            private: false
+            range: "3:38[71-82]"
+            selector:
+              content: "json.ignore"
+              range: "3:38[71-82]"
+            value:
+              range: "3:38[71-82]"
+              data: true
 ```

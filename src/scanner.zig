@@ -63,6 +63,7 @@ pub const TokenKind = union(enum) {
     Colon,
     Semicolon,
     Dot,
+    QuestionMark,
 
     Pact,
     Import,
@@ -232,10 +233,6 @@ const Context = struct {
         return errors;
     }
 
-    inline fn ok(self: Context) bool { // TODO: should not need it.
-        return self.errors == null;
-    }
-
     inline fn peekAscii(self: *Context) ?u8 {
         if (self.it.i >= self.it.bytes.len or !std.ascii.isAscii(self.it.bytes[self.it.i])) {
             return null;
@@ -367,22 +364,6 @@ const Context = struct {
         });
     }
 
-    inline fn setError(self: *Context, message: []const u8) void { // TODO: should not need it!
-        if (self.errors == null) {
-            self.errors = ScanError{ .message = message, .position = self.currentPosition(), .literal = "" };
-        }
-    }
-
-    inline fn setErrorForCurrentLexeme(self: *Context, message: []const u8) void { // TODO: should not need it.
-        if (self.errors == null) {
-            self.errors = ScanError{
-                .message = message,
-                .position = self.currentPosition(),
-                .literal = self.currentLexeme(),
-            };
-        }
-    }
-
     /// scan all the tokens until EOF is reached or an error is encountered.
     fn scanAll(self: *Context) !void {
         while (true) {
@@ -428,6 +409,7 @@ const Context = struct {
                 '<' => try self.addToken(.LessThan),
                 '>' => try self.addToken(.GreaterThan),
                 ';' => try self.addToken(.Semicolon),
+                '?' => try self.addToken(.QuestionMark),
                 ',' => try self.addToken(.Comma),
                 '.' => try self.addToken(.Dot),
                 ':' => try self.addToken(.Colon),

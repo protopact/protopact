@@ -591,7 +591,7 @@ const Context = struct {
                     self.consume();
                     const oneOfNameToken = self.consumeRequiredToken(.Identifier, "oneof group name") catch |err|
                         if (try self.recoverExitsScope(err, MessageBodyRecoveryPoints, false)) break else continue;
-                    if (self.processOneOfBody(oneOfGroups.len(), &fields)) |v| {
+                    if (self.processOneOfBody(@intCast(oneOfGroups.len()), &fields)) |v| {
                         try oneOfGroups.append(ast.OneOf{
                             .name = ast.Identifier{
                                 .value = try self.copyString(oneOfNameToken.literal),
@@ -640,9 +640,10 @@ const Context = struct {
         nameToken: scanner.Token,
         documentation: ?ast.Documentation,
         options: []ast.OptionAssignmentNode,
-        tag: ?u32,
+        nullable: bool,
+        tag: ?u16,
         dataType: ast.Field.RangedDataType,
-        oneOfGroupIndex: ?usize,
+        oneOfGroupIndex: ?u16,
     ) Allocator.Error!ast.Field {
         return ast.Field{
             .name = .{
@@ -651,6 +652,7 @@ const Context = struct {
             },
             .documentation = documentation,
             .options = options,
+            .nullable = nullable,
             .range = ast.Range{
                 .start = nameToken.position,
                 .endOffset = self.it.currentAssumeSafe().endOffset(),
@@ -661,21 +663,22 @@ const Context = struct {
         };
     }
 
-    fn parseField(self: *Context, oneOfGroupIndex: ?usize) Error!ParseResult(ast.Field) {
+    fn parseField(self: *Context, oneOfGroupIndex: ?u16) Error!ParseResult(ast.Field) {
         const documentation = try self.consumeStagedDocumentationFor(self.it.currentAssumeSafe().position);
         const nameToken = try self.consumeRequiredToken(.Identifier, "field name");
         _ = try self.consumeRequiredToken(.Colon, ":");
+        const nullable = self.consumeOptionalTokenBool(.QuestionMark);
 
         const dataType = try self.parseFieldDataType();
         if (dataType.scopeExited) {
             return .initScopeExited(
-                try self.buildField(nameToken, documentation, &.{}, null, dataType.data, oneOfGroupIndex),
+                try self.buildField(nameToken, documentation, &.{}, nullable, null, dataType.data, oneOfGroupIndex),
             );
         }
-        var tag: ?u32 = null;
+        var tag: ?u16 = null;
         if (self.consumeOptionalTokenBool(.Equal)) {
             if (self.consumeRequiredToken(.Integer, "field tag number")) |tagToken| {
-                if (std.math.cast(u32, tagToken.kind.Integer)) |tagValue| {
+                if (std.math.cast(u16, tagToken.kind.Integer)) |tagValue| {
                     if (tagValue == 0) {
                         self.addError(SyntaxError.fieldTagNumericalError(&tagToken));
                     }
@@ -683,16 +686,16 @@ const Context = struct {
                 } else self.addError(SyntaxError.fieldTagNumericalError(&tagToken));
             } else |err| if (try self.recoverExitsScope(err, &.{ .Hash, .RawHash, .PrivateHash, .Comma }, true)) {
                 return .initScopeExited(
-                    try self.buildField(nameToken, documentation, &.{}, tag, dataType.data, oneOfGroupIndex),
+                    try self.buildField(nameToken, documentation, &.{}, nullable, tag, dataType.data, oneOfGroupIndex),
                 );
             }
         }
 
         return if (self.parseItemOptions(.Comma)) |v| .initValue(
-            try self.buildField(nameToken, documentation, v.data, tag, dataType.data, oneOfGroupIndex),
+            try self.buildField(nameToken, documentation, v.data, nullable, tag, dataType.data, oneOfGroupIndex),
             v.scopeExited,
         ) else |err| .initValue(
-            try self.buildField(nameToken, documentation, &.{}, tag, dataType.data, oneOfGroupIndex),
+            try self.buildField(nameToken, documentation, &.{}, nullable, tag, dataType.data, oneOfGroupIndex),
             try self.recoverExitsScope(err, MessageBodyRecoveryPoints, true),
         );
     }
@@ -753,7 +756,7 @@ const Context = struct {
 
     fn processOneOfBody(
         self: *Context,
-        oneOfGroupIndex: ?usize,
+        oneOfGroupIndex: ?u16,
         fields: *StackFallbackArray(ast.Field, 40),
     ) Error!ParseResult(struct { options: []const ast.OptionAssignmentNode }) {
         const OneOfBodyRecoveryPoints: []const TokenKindTag = &.{
@@ -981,7 +984,7 @@ const Context = struct {
         input: ?ast.FuncArg,
         output: ?ast.FuncArg,
         documentation: ?ast.Documentation,
-        tag: ?u32,
+        tag: ?u16,
     ) Allocator.Error!ast.Func {
         return ast.Func{
             .name = ast.Identifier{
@@ -1026,10 +1029,10 @@ const Context = struct {
         }
 
         // Optional Tag
-        var tag: ?u32 = null;
+        var tag: ?u16 = null;
         if (self.consumeOptionalTokenBool(.Equal)) {
             const tagToken = try self.consumeRequiredToken(.Integer, "func tag");
-            if (std.math.cast(u32, tagToken.kind.Integer)) |tagValue| {
+            if (std.math.cast(u16, tagToken.kind.Integer)) |tagValue| {
                 if (tagValue == 0) {
                     self.addError(SyntaxError.funcTagNumericalError(&tagToken));
                 }

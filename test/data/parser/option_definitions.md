@@ -18,6 +18,7 @@ option_definitions:
         type: "bool"
         type_range: "2:16[33-37]"
         tag: null
+        nullable: false
         options:
 ```
 
@@ -47,6 +48,7 @@ option_definitions:
         type: "bool"
         type_range: "2:16[50-54]"
         tag: 1
+        nullable: false
         options:
           - raw: false
             private: false
@@ -67,15 +69,18 @@ option_definitions:
             type: "bool"
             type_range: "4:9[108-112]"
             tag: null
+            nullable: false
             options:
           - name: "that"
             range: "5:3[116-147]"
             type: "list[item=wellknown.Timestamp]"
             type_range: "5:9[122-147]"
             tag: null
+            nullable: false
             options:
         type_range: "3:23[92-150]"
         tag: null
+        nullable: false
         options:
 ```
 

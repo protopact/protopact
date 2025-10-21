@@ -57,6 +57,7 @@ messages:
           This is a documentation for the field.
         type: "string"
         tag: 1
+        nullable: false
         options:
 ```
 
@@ -95,6 +96,7 @@ messages:
           This is a documentation for the field.
         type: "string"
         tag: 1
+        nullable: false
         options:
   - name: "AnotherOne"
     documentation: |
