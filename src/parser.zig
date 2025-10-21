@@ -640,6 +640,7 @@ const Context = struct {
         nameToken: scanner.Token,
         documentation: ?ast.Documentation,
         options: []ast.OptionAssignmentNode,
+        nullable: bool,
         tag: ?u16,
         dataType: ast.Field.RangedDataType,
         oneOfGroupIndex: ?u16,
@@ -651,6 +652,7 @@ const Context = struct {
             },
             .documentation = documentation,
             .options = options,
+            .nullable = nullable,
             .range = ast.Range{
                 .start = nameToken.position,
                 .endOffset = self.it.currentAssumeSafe().endOffset(),
@@ -665,11 +667,12 @@ const Context = struct {
         const documentation = try self.consumeStagedDocumentationFor(self.it.currentAssumeSafe().position);
         const nameToken = try self.consumeRequiredToken(.Identifier, "field name");
         _ = try self.consumeRequiredToken(.Colon, ":");
+        const nullable = self.consumeOptionalTokenBool(.QuestionMark);
 
         const dataType = try self.parseFieldDataType();
         if (dataType.scopeExited) {
             return .initScopeExited(
-                try self.buildField(nameToken, documentation, &.{}, null, dataType.data, oneOfGroupIndex),
+                try self.buildField(nameToken, documentation, &.{}, nullable, null, dataType.data, oneOfGroupIndex),
             );
         }
         var tag: ?u16 = null;
@@ -683,16 +686,16 @@ const Context = struct {
                 } else self.addError(SyntaxError.fieldTagNumericalError(&tagToken));
             } else |err| if (try self.recoverExitsScope(err, &.{ .Hash, .RawHash, .PrivateHash, .Comma }, true)) {
                 return .initScopeExited(
-                    try self.buildField(nameToken, documentation, &.{}, tag, dataType.data, oneOfGroupIndex),
+                    try self.buildField(nameToken, documentation, &.{}, nullable, tag, dataType.data, oneOfGroupIndex),
                 );
             }
         }
 
         return if (self.parseItemOptions(.Comma)) |v| .initValue(
-            try self.buildField(nameToken, documentation, v.data, tag, dataType.data, oneOfGroupIndex),
+            try self.buildField(nameToken, documentation, v.data, nullable, tag, dataType.data, oneOfGroupIndex),
             v.scopeExited,
         ) else |err| .initValue(
-            try self.buildField(nameToken, documentation, &.{}, tag, dataType.data, oneOfGroupIndex),
+            try self.buildField(nameToken, documentation, &.{}, nullable, tag, dataType.data, oneOfGroupIndex),
             try self.recoverExitsScope(err, MessageBodyRecoveryPoints, true),
         );
     }

@@ -79,9 +79,14 @@ pub const Enum = struct {
 
 /// Field holds all the information for a field inside a model.
 pub const Field = struct {
+    /// name of the field as it appears in the input file.
     name: Identifier,
+    /// field data type.
     dataType: RangedDataType,
+    /// optional explicit field tag assignment. This is a numerical identifier for this field.
     tag: ?u16,
+    /// whether or not field can be null.
+    nullable: bool,
     /// options assigned to the field.
     options: []const OptionAssignmentNode,
     /// range is the boundary of the statement in the source code.
