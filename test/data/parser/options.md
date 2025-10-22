@@ -504,3 +504,68 @@ options:
           range: "4:7[42-44]"
           data: 12
 ```
+
+# values with selectors
+
+```pactum
+# {
+    openapi.links = {
+        // below is a map<string, Link> where Link is an object and the field selectors bind to the object.
+        "home" = {url="https://koolstuff.io/", description="some link description"}
+    }
+
+    openapi.extra = {
+        // below is a map<string, string> where values do not bind to any object, they are raw strings.
+        "key" = {"a" = "b"},
+    }
+}
+```
+
+```yaml
+options:
+  - raw: false
+    private: false
+    range: "1:3[2-387]"
+    selector:
+      content: ""
+      range: "0:0[0-0]"
+    block:
+      - raw: false
+        private: false
+        range: "2:5[8-223]"
+        selector:
+          content: "openapi.links"
+          range: "2:5[8-21]"
+        value:
+          range: "2:21[24-223]"
+          data:
+            key: "home"
+            value:
+              range: "4:18[151-217]"
+              data:
+                key: url
+                value:
+                  range: "4:23[156-179]"
+                  data: "https://koolstuff.io/"
+                key: description
+                value:
+                  range: "4:60[193-216]"
+                  data: "some link description"
+      - raw: false
+        private: false
+        range: "7:5[229-385]"
+        selector:
+          content: "openapi.extra"
+          range: "7:5[229-242]"
+        value:
+          range: "7:21[245-385]"
+          data:
+            key: "key"
+            value:
+              range: "9:17[367-378]"
+              data:
+                key: "a"
+                value:
+                  range: "9:24[374-377]"
+                  data: "b"
+```

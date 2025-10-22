@@ -198,7 +198,10 @@ const Context = struct {
                     self.incrIndent();
                     defer self.decrIndent();
                     try self.writeKey("key");
-                    try self.writer.print(" \"{s}\"", .{item.key});
+                    if (item.selector)
+                        try self.writer.print(" {s}", .{item.key})
+                    else
+                        try self.writer.print(" \"{s}\"", .{item.key});
                     try self.writeKey("value");
                     try self.writeValue(&item.value);
                     self.inArray = false;

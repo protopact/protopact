@@ -1330,29 +1330,24 @@ const Context = struct {
         const currentScope = self.scopeDelimiterContext();
 
         const scopeExited = blk: {
-            mainLoop: while (true) {
+            while (true) {
                 const next = self.it.next() orelse break :blk true;
                 switch (next.kind) {
                     .RightCurlyBrace => break :blk false,
-                    .Comma => self.consume(),
-                    .String => {
+                    .Comma, .Comment => {},
+                    .String, .Identifier => {
                         _ = self.consumeRequiredToken(.Equal, "=") catch |err| {
                             if (try self.recoverExitsScope(err, ObjectRecoveryPoints, false))
                                 break :blk true;
-
-                            _ = self.consumeOptionalTokenBool(.Comma);
-                            continue :mainLoop;
                         };
                         if (self.parseValue()) |v| {
-                            try values.append(.{
-                                .key = try self.copyString(next.kind.String),
-                                .value = v.data,
-                            });
+                            try values.append(if (next.kind == .String)
+                                .{ .key = try self.copyString(next.kind.String), .selector = false, .value = v.data }
+                            else
+                                .{ .key = try self.copyString(next.literal), .selector = true, .value = v.data });
                             if (v.scopeExited) break :blk true;
                         } else |err| if (try self.recoverExitsScope(err, ObjectRecoveryPoints, false))
                             break :blk true;
-
-                        _ = self.consumeOptionalTokenBool(.Comma);
                     },
                     else => {
                         self.addError(SyntaxError.expectToken(&next, "key string literal"));

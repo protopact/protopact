@@ -18,4 +18,6 @@ pub const RangedValue = code.Ranged(Value);
 pub const Entry = struct {
     key: []const u8,
     value: RangedValue,
+    /// indicates whether or not the key is a field selector or a raw string.
+    selector: bool,
 };
