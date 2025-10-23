@@ -224,7 +224,7 @@ const (
 
 	/// Documentation for the last one
 	// ignore
-	LastOne = { "tags" = [1.2] }
+	LastOne = { "tags": [1.2] }
 )
 ```
 

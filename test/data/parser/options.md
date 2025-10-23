@@ -306,31 +306,31 @@ options:
 # object
 
 ```pactum
-#items = { "name" = "Pancake", "kind" = "food", "id" = 1 }
+#items = { "name": "Pancake", "kind": "food", "id": 1 }
 ```
 
 ```yaml
 options:
   - raw: false
     private: false
-    range: "1:2[1-58]"
+    range: "1:2[1-55]"
     selector:
       content: "items"
       range: "1:2[1-6]"
     value:
-      range: "1:10[9-58]"
+      range: "1:10[9-55]"
       data:
         key: "name"
         value:
-          range: "1:21[20-29]"
+          range: "1:20[19-28]"
           data: "Pancake"
         key: "kind"
         value:
-          range: "1:41[40-46]"
+          range: "1:39[38-44]"
           data: "food"
         key: "id"
         value:
-          range: "1:56[55-56]"
+          range: "1:53[52-53]"
           data: 1
 ```
 
@@ -338,16 +338,16 @@ options:
 
 ```pactum
 r#"com.meshapi:meta" = {
-	"required" = true,
-	"no comma" = 1
-	"array" = [1 2 3]
-	"object" = {
-		"nested object" = {
-			"nested array" = [
+	"required": true,
+	"no comma": 1
+	"array": [1 2 3]
+	"object": {
+		"nested object": {
+			"nested array": [
 				1
 				2.3
 				true
-				{ "name" = "Pancake" }
+				{ "name": "Pancake" }
 			]
 		}
 	}
@@ -358,54 +358,54 @@ r#"com.meshapi:meta" = {
 options:
   - raw: true
     private: false
-    range: "1:3[2-201]"
+    range: "1:3[2-194]"
     selector:
       content: "com.meshapi:meta"
       range: "1:3[2-20]"
     value:
-      range: "1:24[23-201]"
+      range: "1:24[23-194]"
       data:
         key: "required"
         value:
-          range: "2:15[39-43]"
+          range: "2:14[38-42]"
           data: true
         key: "no comma"
         value:
-          range: "3:15[59-60]"
+          range: "3:14[57-58]"
           data: 1
         key: "array"
         value:
-          range: "4:12[72-79]"
+          range: "4:11[69-76]"
           data:
-            - range: "4:13[73-74]"
+            - range: "4:12[70-71]"
               data: 1
-            - range: "4:15[75-76]"
+            - range: "4:14[72-73]"
               data: 2
-            - range: "4:17[77-78]"
+            - range: "4:16[74-75]"
               data: 3
         key: "object"
         value:
-          range: "5:13[92-199]"
+          range: "5:12[88-192]"
           data:
             key: "nested object"
             value:
-              range: "6:21[114-196]"
+              range: "6:20[109-189]"
               data:
                 key: "nested array"
                 value:
-                  range: "7:21[136-192]"
+                  range: "7:20[130-185]"
                   data:
-                    - range: "8:5[142-143]"
+                    - range: "8:5[136-137]"
                       data: 1
-                    - range: "9:5[148-151]"
+                    - range: "9:5[142-145]"
                       data: 2.3
-                    - range: "10:5[156-160]"
+                    - range: "10:5[150-154]"
                       data: true
-                    - range: "11:5[165-187]"
+                    - range: "11:5[159-180]"
                       data:
                         key: "name"
                         value:
-                          range: "11:16[176-185]"
+                          range: "11:15[169-178]"
                           data: "Pancake"
 ```
 
@@ -511,12 +511,12 @@ options:
 # {
     openapi.links = {
         // below is a map<string, Link> where Link is an object and the field selectors bind to the object.
-        "home" = {url="https://koolstuff.io/", description="some link description"}
+        "home": {url:"https://koolstuff.io/", description:"some link description"}
     }
 
     openapi.extra = {
         // below is a map<string, string> where values do not bind to any object, they are raw strings.
-        "key" = {"a" = "b"},
+        "key": {"a": "b"},
     }
 }
 ```
@@ -525,47 +525,47 @@ options:
 options:
   - raw: false
     private: false
-    range: "1:3[2-387]"
+    range: "1:3[2-384]"
     selector:
       content: ""
       range: "0:0[0-0]"
     block:
       - raw: false
         private: false
-        range: "2:5[8-223]"
+        range: "2:5[8-222]"
         selector:
           content: "openapi.links"
           range: "2:5[8-21]"
         value:
-          range: "2:21[24-223]"
+          range: "2:21[24-222]"
           data:
             key: "home"
             value:
-              range: "4:18[151-217]"
+              range: "4:17[150-216]"
               data:
                 key: url
                 value:
-                  range: "4:23[156-179]"
+                  range: "4:22[155-178]"
                   data: "https://koolstuff.io/"
                 key: description
                 value:
-                  range: "4:60[193-216]"
+                  range: "4:59[192-215]"
                   data: "some link description"
       - raw: false
         private: false
-        range: "7:5[229-385]"
+        range: "7:5[228-382]"
         selector:
           content: "openapi.extra"
-          range: "7:5[229-242]"
+          range: "7:5[228-241]"
         value:
-          range: "7:21[245-385]"
+          range: "7:21[244-382]"
           data:
             key: "key"
             value:
-              range: "9:17[367-378]"
+              range: "9:16[365-375]"
               data:
                 key: "a"
                 value:
-                  range: "9:24[374-377]"
+                  range: "9:22[371-374]"
                   data: "b"
 ```
