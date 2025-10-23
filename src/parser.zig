@@ -567,7 +567,7 @@ const Context = struct {
         while (true) {
             const token = try self.peekNextOrError();
             switch (token.kind) {
-                .Comment => self.consume(),
+                .Comment, .Comma => self.consume(),
                 .Documentation => try self.captureDocumentationGroup(),
                 .Hash, .RawHash, .PrivateHash => if (self.parseOption(false, null)) |v| {
                     try options.append(v.data);
@@ -610,7 +610,6 @@ const Context = struct {
                     self.popScopeDelimiter(.CurlyBrace);
                     break;
                 },
-                .Comma => self.consume(),
                 else => {
                     self.addError(SyntaxError.unexpectedToken(&token));
                     if (try self.skipTokensUntil(MessageBodyRecoveryPoints, false)) {
@@ -855,10 +854,7 @@ const Context = struct {
         var targetSet = ast.OptionTargetSet.init(.{});
         targetSet.insert(try self.parseOptionTarget());
         while (true) {
-            const nextToken = self.it.peek(1) orelse {
-                self.addError(SyntaxError.unexpectedEOF());
-                return Error.UnexpectedToken;
-            };
+            const nextToken = try self.peekNextOrError();
             if (nextToken.kind == .LeftCurlyBrace) {
                 self.consume();
                 break;
@@ -870,20 +866,19 @@ const Context = struct {
         var fields = StackFallbackArray(ast.Field, 40).init(self.transientAllocator);
 
         while (true) {
-            const nextToken = self.it.peek(1) orelse {
-                self.addError(SyntaxError.unexpectedEOF());
-                return Error.UnexpectedToken;
-            };
+            const nextToken = try self.peekNextOrError();
             switch (nextToken.kind) {
-                .Comment => self.consume(),
+                .Comment, .Comma => self.consume(),
                 .RightCurlyBrace => {
                     self.consume();
                     break;
                 },
-                // TODO: FIX ME
-                else => try fields.append((try self.parseField(null)).data),
+                else => if (self.parseField(null)) |v| {
+                    try fields.append(v.data);
+                    if (v.scopeExited) break;
+                } else |err| if (try self.recoverExitsScope(err, &.{.Comma}, true))
+                    break,
             }
-            _ = self.consumeOptionalTokenBool(.Comma);
         }
 
         try self.optionDefinitions.append(self.allocator, ast.OptionDefinition{
@@ -899,12 +894,13 @@ const Context = struct {
     inline fn parseOptionTarget(self: *Context) Error!ast.OptionTarget {
         const targetToken = self.it.next() orelse {
             self.addError(SyntaxError.unexpectedEOF());
-            return Error.UnexpectedToken;
+            return Error.UnexpectedEOF;
         };
         switch (targetToken.kind) {
             .TargetPact => return ast.OptionTarget.Pact,
             .TargetOneOf => return ast.OptionTarget.OneOf,
             .TargetEnum => return ast.OptionTarget.Enum,
+            .TargetConst => return ast.OptionTarget.Constant,
             .TargetEnumVariant => return ast.OptionTarget.EnumVariant,
             .TargetMessage => return ast.OptionTarget.Message,
             .TargetField => return ast.OptionTarget.Field,
@@ -1573,7 +1569,6 @@ const Context = struct {
     }
 
     fn addError(self: *Context, err: SyntaxError) void {
-        // TODO: maybe add error skips adding errors if the last error is on the same location.
         if (self.errors.len == self.errors.capacity()) {
             return;
         }
@@ -1606,6 +1601,7 @@ const Context = struct {
             } else {
                 self.addError(SyntaxError.unexpectedToken(&token));
             }
+            if (token.kind == .EOF) return Error.UnexpectedEOF;
             return Error.UnexpectedToken;
         } else {
             self.addError(SyntaxError.unexpectedEOF());

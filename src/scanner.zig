@@ -22,6 +22,7 @@ const keywordTable = std.StaticStringMap(TokenKind).initComptime(.{
 
     .{ "Pact", .TargetPact },
     .{ "Message", .TargetMessage },
+    .{ "Const", .TargetConst },
     .{ "Interface", .TargetInterface },
     .{ "Field", .TargetField },
     .{ "OneOf", .TargetOneOf },
@@ -85,6 +86,7 @@ pub const TokenKind = union(enum) {
     TargetInterface,
     TargetEnum,
     TargetEnumVariant,
+    TargetConst,
     TargetOneOf,
     TargetFunc,
     TargetField,
