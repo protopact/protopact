@@ -1323,7 +1323,7 @@ const Context = struct {
     ///
     /// NOTE: It assumes the the left curly brace is already consumed.
     fn parseValueObject(self: *Context) Error!ParseResult(ast.RangedValue) {
-        const ObjectRecoveryPoints: []const TokenKindTag = &.{ .String, .Comma };
+        const ObjectRecoveryPoints: []const TokenKindTag = &.{ .String, .Identifier, .Comma };
         try self.pushScopeDelimiter(.CurlyBrace);
         var values = StackFallbackArray(ast.Entry, 20).init(self.transientAllocator);
         const start = self.it.currentAssumeSafe().position;
@@ -1336,7 +1336,7 @@ const Context = struct {
                     .RightCurlyBrace => break :blk false,
                     .Comma, .Comment => {},
                     .String, .Identifier => {
-                        _ = self.consumeRequiredToken(.Equal, "=") catch |err| {
+                        _ = self.consumeRequiredToken(.Colon, ":") catch |err| {
                             if (try self.recoverExitsScope(err, ObjectRecoveryPoints, false))
                                 break :blk true;
                         };

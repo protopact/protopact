@@ -210,8 +210,8 @@ pact meshapi.gateway
 const (
 	b = [ 1 2 pancake ]
 	a = {
-		"other_key" = [ 1 2
-		"some_key" = false
+		"other_key": [ 1 2
+		"some_key": false
 	}
     b = 2.3
 	c = false
@@ -247,8 +247,8 @@ interfaces:
   - name: "some_service"
 
 4:12[41] expected value @literal=pancake
-7:14[93] expected value @literal==
-8:2[102] expected value @literal=}
+7:13[91] expected value @literal=:
+8:2[100] expected value @literal=}
 ```
 
 # bad const - nested scope
@@ -259,10 +259,10 @@ pact meshapi.gateway
 const (
 	b = [ 1 2 pancake ]
 	a = {
-		"other_key" = {
-			"nested_scope" = [1 2
+		"other_key": {
+			"nested_scope": [1 2
 		},
-		"some_key" = false
+		"some_key": false
 	}
 	b = 2.3
 	c = false
@@ -300,7 +300,7 @@ interfaces:
   - name: "some_service"
 
 4:12[41] expected value @literal=pancake
-8:3[103] expected value @literal=}
+8:3[101] expected value @literal=}
 ```
 
 # bad const - invalid closing
@@ -309,7 +309,7 @@ interfaces:
 pact meshapi.gateway
 
 const SomeValue = {
-	"array" = [1 2)
+	"array": [1 2)
 }
 
 interface some_service {}
@@ -331,8 +331,8 @@ messages:
 interfaces:
   - name: "some_service"
 
-4:16[57] expected value @literal=)
-5:1[59-60] unexpected token @literal=}
+4:15[56] expected value @literal=)
+5:1[58-59] unexpected token @literal=}
 ```
 
 # bad const - invalid closing - one line apart
@@ -341,7 +341,7 @@ interfaces:
 pact meshapi.gateway
 
 const SomeValue = {
-	"array" = [1 2)
+	"array": [1 2)
 }
 interface some_service {}
 ```
@@ -358,8 +358,8 @@ constants:
 interfaces:
   - name: "some_service"
 
-4:16[57] expected value @literal=)
-5:1[59-60] unexpected token @literal=}
+4:15[56] expected value @literal=)
+5:1[58-59] unexpected token @literal=}
 ```
 
 # bad const - ignored scoping after unexpected token
@@ -368,7 +368,7 @@ interfaces:
 pact meshapi.gateway
 
 const SomeValue = {
-	"array" = [1 2 pancake (false true 1 2 {} []) false
+	"array": [1 2 pancake (false true 1 2 {} []) false
 }
 interface some_service {}
 ```
@@ -386,8 +386,8 @@ constants:
 interfaces:
   - name: "some_service"
 
-4:17[58] expected value @literal=pancake
-5:1[95] expected value @literal=}
+4:16[57] expected value @literal=pancake
+5:1[94] expected value @literal=}
 ```
 
 # bad const - comma
@@ -396,7 +396,7 @@ interfaces:
 pact meshapi.gateway
 
 const SomeValue = {
-	"array" = [1 2 pancake, 3 (false true 1 2 {} []), false,
+	"array": [1 2 pancake, 3 (false true 1 2 {} []), false,
 }
 interface some_service {}
 ```
@@ -415,9 +415,9 @@ constants:
 interfaces:
   - name: "some_service"
 
-4:17[58] expected value @literal=pancake
-4:28[69] expected value @literal=(
-5:1[100] expected value @literal=}
+4:16[57] expected value @literal=pancake
+4:27[68] expected value @literal=(
+5:1[99] expected value @literal=}
 ```
 
 # bad const - options
@@ -426,7 +426,7 @@ interfaces:
 pact meshapi.gateway
 
 const SomeValue = {
-	"array" = [1 2 pancake
+	"array": [1 2 pancake
 } { required, json.name = pancake, optional )
 interface some_service {}
 ```
@@ -456,9 +456,9 @@ constants:
 interfaces:
   - name: "some_service"
 
-4:17[58] expected value @literal=pancake
-5:27[92] expected value @literal=pancake
-5:45[110] expected option identifier or key @literal=)
+4:16[57] expected value @literal=pancake
+5:27[91] expected value @literal=pancake
+5:45[109] expected option identifier or key @literal=)
 ```
 
 # const group EOF
@@ -467,10 +467,8 @@ interfaces:
 const (
     A = "1"
     B = {
-        "key" = "value",
+        "key": "value",
 ```
-
-> Duplicated EOF error is not great. It is due to the fact that processX functions do NOT return scopeExited.
 
 ```yaml
 constants:
@@ -488,7 +486,7 @@ constants:
 
 ```pact
 const B = {
-    "key" = "value",
+    "key": "value",
 ```
 
 ```yaml
@@ -886,7 +884,7 @@ messages:
 ```pactum
 message A {
     #a.b = {
-        "data" = [1,,,,,2]
+        "data": [1,,,,,2]
     }
 }
 ```

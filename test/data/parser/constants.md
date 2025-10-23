@@ -47,7 +47,7 @@ constants:
 const (
 	items = ["a" 1 false] { ignore = false }
 	object = {
-		"name" = "something"
+		"name": "something"
 	} { ignore = true }
 	pi = 3.14
 )
@@ -78,28 +78,28 @@ constants:
           range: "2:35[42-47]"
           data: false
   - name: "object"
-    range: "3:2[51-105]"
+    range: "3:2[51-104]"
     value:
-      range: "3:11[60-87]"
+      range: "3:11[60-86]"
       data:
         key: "name"
         value:
-          range: "4:12[73-84]"
+          range: "4:11[72-83]"
           data: "something"
     options:
       - raw: false
         private: false
-        range: "5:6[90-103]"
+        range: "5:6[89-102]"
         selector:
           content: "ignore"
-          range: "5:6[90-96]"
+          range: "5:6[89-95]"
         value:
-          range: "5:15[99-103]"
+          range: "5:15[98-102]"
           data: true
   - name: "pi"
-    range: "6:2[107-116]"
+    range: "6:2[106-115]"
     value:
-      range: "6:7[112-116]"
+      range: "6:7[111-115]"
       data: 3.14
     options:
 ```
