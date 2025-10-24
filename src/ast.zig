@@ -13,7 +13,7 @@ pub const RangedValue = dyn.RangedValue;
 pub const Entry = dyn.Entry;
 
 const opts = @import("ast/options.zig");
-pub const OptionAssignmentNode = opts.AssignmentNode;
+pub const OptionAssignmentNode = opts.OptionAssignmentNode;
 
 pub const Identifier = code.Ranged([]const u8);
 

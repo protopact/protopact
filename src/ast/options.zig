@@ -5,7 +5,7 @@ const Range = code.Range;
 
 /// AssignmentNode describes an option setting, since options can be blocks or a single assignment
 /// the value can either be a leaf or a tree.
-pub const AssignmentNode = struct {
+pub const OptionAssignmentNode = struct {
     /// indicates that the assignment is marked as private or internally valuable.
     private: bool,
 
@@ -23,6 +23,6 @@ pub const AssignmentNode = struct {
 
     pub const Value = union(enum) {
         Leaf: dyn.RangedValue,
-        Group: []const AssignmentNode,
+        Group: []const OptionAssignmentNode,
     };
 };
