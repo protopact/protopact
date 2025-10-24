@@ -1329,7 +1329,10 @@ const Context = struct {
             while (true) {
                 const next = self.it.next() orelse break :blk true;
                 switch (next.kind) {
-                    .RightCurlyBrace => break :blk false,
+                    .RightCurlyBrace => {
+                        self.popScopeDelimiter(.CurlyBrace);
+                        break :blk false;
+                    },
                     .Comma, .Comment => {},
                     .String, .Identifier => {
                         _ = self.consumeRequiredToken(.Colon, ":") catch |err| {
