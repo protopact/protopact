@@ -384,8 +384,8 @@ pub const Iterator = struct {
     }
 
     pub inline fn goBack(self: *Iterator) void {
+        std.debug.assert(self.i > 0);
         self.i -= 1;
-        std.debug.assert(self.i >= 0);
     }
 
     /// Fills the token buffer if needed for peek operations.
