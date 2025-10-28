@@ -1896,7 +1896,7 @@ const Context = struct {
     }
 };
 
-const ParseError = tokenizer.TokenizeError;
+const ParseError = tokenizer.TokenizeError || Allocator.Error;
 
 pub const Result = struct {
     allocator: std.heap.ArenaAllocator,

@@ -31,8 +31,6 @@ const keywordTable = std.StaticStringMap(TokenKind).initComptime(.{
     .{ "Func", .TargetFunc },
 });
 
-const IteratorError = error{ReceivedNonAscii};
-
 pub const ScanError = struct {
     message: []const u8,
     // literal is the part of the source that is related to the error.
@@ -281,13 +279,13 @@ pub const Iterator = struct {
     /// advances the iterator only if the next character is ASCII.
     /// If the character is not ASCII, an error gets returned otherwise
     /// an optional ASCII character.
-    inline fn advanceAscii(self: *Iterator) IteratorError!?u8 {
+    inline fn advanceAscii(self: *Iterator) error{ReceivedNonAscii}!?u8 {
         if (self.it.i >= self.it.bytes.len) {
             return null;
         }
 
         if (!std.ascii.isAscii(self.it.bytes[self.it.i])) {
-            return IteratorError.ReceivedNonAscii;
+            return error.ReceivedNonAscii;
         }
 
         defer {
@@ -795,7 +793,7 @@ pub const Result = struct {
     }
 };
 
-pub const TokenizeError = error{ InvalidUtf8, OutOfMemory }; // TODO: I might need the invalid utf8
+pub const TokenizeError = error{InvalidUtf8};
 
 pub fn tokenize(data: []const u8) TokenizeError!Iterator {
     const utf8View = std.unicode.Utf8View.init(data) catch {
