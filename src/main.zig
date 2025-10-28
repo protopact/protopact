@@ -1,5 +1,4 @@
 const std = @import("std");
-const scanner = @import("scanner.zig");
 const parser = @import("parser.zig");
 const astcoder = @import("astcoder.zig");
 

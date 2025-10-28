@@ -1,6 +1,6 @@
 const std = @import("std");
 const pactum = @import("pactum");
-const scanner = pactum.scanner;
+const tokenizer = pactum.tokenizer;
 
 test "tokenize" {
     const allocator = std.testing.allocator;
@@ -252,10 +252,9 @@ test "tokenize" {
     var buffer: [512]u8 = undefined;
 
     for (tests) |tt| {
-        var stream = std.io.fixedBufferStream(&buffer);
-        const writer = stream.writer();
+        var writer = std.Io.Writer.fixed(&buffer);
 
-        var result = try scanner.tokenize(allocator, tt.source);
+        var result = try tokenizer.tokenizeAlloc(allocator, tt.source);
         defer result.deinit();
 
         for (tt.errors, 0..) |expectedErr, index| {
@@ -275,16 +274,18 @@ test "tokenize" {
             try expectNoScanError(result.errors[tt.errors.len..]);
         }
 
-        try result.debug(writer);
+        var testAllocator = std.heap.ArenaAllocator.init(std.testing.allocator);
+        defer testAllocator.deinit();
+        try result.debug(testAllocator.allocator(), &writer);
 
         try std.testing.expectEqualStrings(
             tt.expectation,
-            stream.getWritten(),
+            writer.buffered(),
         );
     }
 }
 
-fn expectNoScanError(errors: []const scanner.ScanError) !void {
+fn expectNoScanError(errors: []const tokenizer.Error) !void {
     if (errors.len == 0) {
         return;
     }
@@ -303,21 +304,17 @@ fn expectNoScanError(errors: []const scanner.ScanError) !void {
     return error.UnexpectedError;
 }
 
-fn formatTokenWithPosition(writer: anytype, tokens: []const scanner.Token) !void {
-    var positionBuffer: [16]u8 = undefined;
+fn formatTokenWithPosition(ally: std.mem.Allocator, writer: *std.Io.Writer, tokens: []const tokenizer.Token) !void {
     var lineBuffer: [512]u8 = undefined;
-
     for (tokens) |item| {
-        var stream = std.io.fixedBufferStream(&lineBuffer);
-        const lineWriter = stream.writer();
-
-        try item.debug(lineWriter);
-        const position = try std.fmt.bufPrint(&positionBuffer, "{d},{d}", .{
+        var lineWriter = std.Io.Writer.fixed(&lineBuffer);
+        try item.debug(ally, &lineWriter);
+        var lineContent = lineWriter.buffered();
+        try writer.print("{s}|{d},{d}>", .{
+            lineContent[0 .. lineContent.len - 1],
             item.position.line,
             item.position.column,
         });
-        const line = stream.getWritten();
-        try std.fmt.format(writer, "{s}|{s}>", .{ line[0 .. line.len - 1], position });
     }
 }
 
@@ -331,7 +328,7 @@ test "positions" {
     const tests = &[_]TestCase{
         .{
             .source = "name = 'pactum'",
-            .expectation = "<Identifier:name|1,1><Equal|1,6><String:pactum|1,8><EOF|0,0>",
+            .expectation = "<Identifier:name|1,1><Equal|1,6><String:pactum|1,8><EOF|1,16>",
         },
         .{
             .source =
@@ -339,7 +336,7 @@ test "positions" {
             \\/** some single-line documentation */
             ,
             .expectation = "<Pact|1,1><Identifier:some|1,6><Dot|1,10><Identifier:package|1,11>" ++
-                "<Documentation: some single-line documentation :+0|2,1><EOF|0,0>",
+                "<Documentation: some single-line documentation :+0|2,1><EOF|2,38>",
         },
         .{
             .source =
@@ -349,33 +346,35 @@ test "positions" {
             \\  */
             ,
             .expectation = "<Pact|1,1><Identifier:some|1,6><Dot|1,10><Identifier:package|1,11>" ++
-                "<Documentation: some multi-line documentation:+2|2,1><EOF|0,0>",
+                "<Documentation: some multi-line documentation:+2|2,1><EOF|4,5>",
         },
         .{
             .source = "name = 'I love Unicode ⬣ !' 1.24",
             .expectation = "<Identifier:name|1,1><Equal|1,6><String:I love Unicode ⬣ !|1,8>" ++
-                "<Float:1.24|1,29><EOF|0,0>",
+                "<Float:1.24|1,29><EOF|1,33>",
         },
         .{
             .source = "name = 'a ⬣ b' /* comment ⬣ */ x = 1",
             .expectation = "<Identifier:name|1,1><Equal|1,6><String:a ⬣ b|1,8>" ++
-                "<Comment: comment ⬣ |1,16><Identifier:x|1,32><Equal|1,34><Integer:1|1,36><EOF|0,0>",
+                "<Comment: comment ⬣ |1,16><Identifier:x|1,32><Equal|1,34><Integer:1|1,36><EOF|1,37>",
         },
     };
 
     var buffer: [512]u8 = undefined;
 
     for (tests) |tt| {
-        var stream = std.io.fixedBufferStream(&buffer);
-        const writer = stream.writer();
+        var writer = std.Io.Writer.fixed(&buffer);
 
-        var result = try scanner.tokenize(allocator, tt.source);
+        var testAllocator = std.heap.ArenaAllocator.init(std.testing.allocator);
+        defer testAllocator.deinit();
+
+        var result = try tokenizer.tokenizeAlloc(allocator, tt.source);
         defer result.deinit();
         try expectNoScanError(result.errors);
-        try formatTokenWithPosition(writer, result.tokens);
+        try formatTokenWithPosition(testAllocator.allocator(), &writer, result.tokens);
         try std.testing.expectEqualStrings(
             tt.expectation,
-            stream.getWritten(),
+            writer.buffered(),
         );
     }
 }

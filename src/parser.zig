@@ -1,5 +1,5 @@
 const std = @import("std");
-const scanner = @import("scanner.zig");
+const tokenizer = @import("tokenizer.zig");
 const ast = @import("ast.zig");
 
 const StackArray = @import("stack_array.zig").StackArray;
@@ -8,7 +8,6 @@ const StackFallbackArray = @import("stack_array.zig").StackFallbackArray;
 const Allocator = std.mem.Allocator;
 
 const Error = error{ UnexpectedToken, UnexpectedEOF, NestingDepthReached } || Allocator.Error;
-const FatalError = error{NestingDepthReached} || Allocator.Error;
 
 const OptionModifiers = struct {
     raw: bool,
@@ -21,41 +20,29 @@ const OptionModifiers = struct {
 
 /// Holds boundary for documentations along with the total content size so that
 /// it can be allocated all at once.
+///
+/// Staged documentation holds total content size, lastDocLine and the position of the documentation
+/// which are considered meta data and can be used to hold multiple instances of a staged documentation.
+///
+/// The storage for the actual content of the documentation is a pointer reference to a shared storage to
+/// reuse the same storage and heap allocated array and avoid unnecessary allocations since there can only
+/// be one staged documentation at a time.
 const StagedDocumentation = struct {
-    startIndex: usize,
-    endIndex: usize,
+    const Store = StackFallbackArray([]const u8, 10);
+
+    /// documentation content boundaries, each slice represents a line documentation/multi-line documentation segment.
+    boundaries: *Store,
     contentSize: usize,
     lastDocLine: u16,
-};
+    position: ast.Position,
 
-const TokenIterator = struct {
-    data: []const scanner.Token,
-    i: usize,
-
-    fn init(data: []const scanner.Token) TokenIterator {
-        return .{ .data = data, .i = 0 };
-    }
-
-    fn peek(self: TokenIterator, i: usize) ?scanner.Token {
-        const cursor = self.i + i;
-        if (cursor > self.data.len or cursor <= 0) {
-            return null;
-        }
-
-        return self.data[cursor - 1];
-    }
-
-    fn next(self: *TokenIterator) ?scanner.Token {
-        if (self.i >= self.data.len) {
-            return null;
-        }
-
-        defer self.i += 1;
-        return self.data[self.i];
-    }
-
-    inline fn currentAssumeSafe(self: *TokenIterator) scanner.Token {
-        return self.data[self.i - 1];
+    fn init(storage: *Store) StagedDocumentation {
+        return .{
+            .boundaries = storage,
+            .contentSize = 0,
+            .lastDocLine = 0,
+            .position = .empty(),
+        };
     }
 };
 
@@ -77,7 +64,7 @@ pub const SyntaxError = struct {
         };
     }
 
-    fn unexpectedToken(token: *const scanner.Token) SyntaxError {
+    fn unexpectedToken(token: *const tokenizer.Token) SyntaxError {
         if (token.kind == .EOF) {
             return .unexpectedEOF();
         }
@@ -97,7 +84,7 @@ pub const SyntaxError = struct {
         };
     }
 
-    fn rawStringOptionWithoutRawMarker(token: *const scanner.Token) SyntaxError {
+    fn rawStringOptionWithoutRawMarker(token: *const tokenizer.Token) SyntaxError {
         return .{
             .message = "use of raw identifier without raw modifier prefix, did you mean to use r# ?",
             .literal = token.literal,
@@ -105,11 +92,11 @@ pub const SyntaxError = struct {
         };
     }
 
-    fn looseDocumentation(token: *const scanner.Token) SyntaxError {
+    fn looseDocumentation(doc: StagedDocumentation) SyntaxError {
         return .{
             .message = "unused documentation, use plain comments instead",
-            .literal = token.literal,
-            .location = Location{ .Range = token.range() },
+            .literal = doc.boundaries.getFirstAssumeSafe(),
+            .location = Location{ .Position = doc.position },
         };
     }
 
@@ -121,7 +108,7 @@ pub const SyntaxError = struct {
         };
     }
 
-    fn enumVariantNumericalError(token: *const scanner.Token) SyntaxError {
+    fn enumVariantNumericalError(token: *const tokenizer.Token) SyntaxError {
         return .{
             .message = "enum value must be a positive integer from 0 to 2^32-1",
             .literal = token.literal,
@@ -129,7 +116,7 @@ pub const SyntaxError = struct {
         };
     }
 
-    fn fieldTagNumericalError(token: *const scanner.Token) SyntaxError {
+    fn fieldTagNumericalError(token: *const tokenizer.Token) SyntaxError {
         return .{
             .message = "field tag value must be a positive integer from 1 to 2^32-1",
             .literal = token.literal,
@@ -137,7 +124,7 @@ pub const SyntaxError = struct {
         };
     }
 
-    fn funcTagNumericalError(token: *const scanner.Token) SyntaxError {
+    fn funcTagNumericalError(token: *const tokenizer.Token) SyntaxError {
         return .{
             .message = "func tag value must be a positive integer from 1 to 2^32-1",
             .literal = token.literal,
@@ -153,7 +140,7 @@ pub const SyntaxError = struct {
         };
     }
 
-    fn expectToken(token: *const scanner.Token, comptime expected: []const u8) SyntaxError {
+    fn expectToken(token: *const tokenizer.Token, comptime expected: []const u8) SyntaxError {
         if (token.kind == .EOF) {
             return .unexpectedEOF();
         }
@@ -205,14 +192,15 @@ const Context = struct {
     const ErrorList = StackArray(SyntaxError, 10);
     const ScopeDelimiterList = StackArray(ScopeDelimiter, 10);
 
-    const TokenKindTag = std.meta.Tag(scanner.TokenKind);
+    const TokenKindTag = std.meta.Tag(tokenizer.TokenKind);
 
     allocator: Allocator,
     transientAllocator: std.mem.Allocator,
-    it: TokenIterator,
+    it: tokenizer.Iterator,
     errors: ErrorList,
     scopeDelimiters: ScopeDelimiterList,
     stagedDocumentation: ?StagedDocumentation,
+    sharedStagedDocumentationStore: StagedDocumentation.Store,
 
     pact: ?ast.Selector,
     imports: std.ArrayList(ast.Import),
@@ -277,14 +265,15 @@ const Context = struct {
         .Semicolon,
     };
 
-    fn init(allocator: Allocator, transientAllocator: Allocator, tokens: []const scanner.Token) Context {
+    fn init(allocator: Allocator, transientAllocator: Allocator, tokenIterator: tokenizer.Iterator) Context {
         return .{
             .allocator = allocator,
             .transientAllocator = transientAllocator,
-            .it = TokenIterator.init(tokens),
+            .it = tokenIterator,
             .errors = ErrorList.init(),
             .scopeDelimiters = ScopeDelimiterList.init(),
             .stagedDocumentation = null,
+            .sharedStagedDocumentationStore = .init(transientAllocator),
             .pact = null,
             .imports = std.ArrayList(ast.Import).initCapacity(allocator, 0) catch unreachable,
             .options = std.ArrayList(ast.OptionAssignmentNode).initCapacity(allocator, 0) catch unreachable,
@@ -298,7 +287,8 @@ const Context = struct {
     }
 
     fn parse(self: *Context) ParseError!void {
-        if (self.parseDocumentationGroup()) |doc| {
+        self.it.fillTokenBufferIfNeeded();
+        if (try self.parseDocumentationGroup()) |doc| {
             if (self.nextTokenAcceptsTopLevelDocumentation(doc)) {
                 self.stagedDocumentation = doc;
             } else {
@@ -312,7 +302,7 @@ const Context = struct {
                 .Import => self.processImport(),
                 .RawHash, .Hash, .PrivateHash => option: {
                     // NB: Special case where we need to consume the first token itself.
-                    self.it.i -= 1;
+                    self.it.goBack();
                     break :option self.processOption();
                 },
                 .Const => self.processConst(),
@@ -323,7 +313,7 @@ const Context = struct {
                 .Comment => {}, // ignore comments.
                 .Documentation => documentation: {
                     // NB: Special case where we need to consume the first token itself.
-                    self.it.i -= 1;
+                    self.it.goBack();
                     break :documentation self.captureDocumentationGroup();
                 },
                 .EOF => break,
@@ -338,7 +328,7 @@ const Context = struct {
                     return;
                 },
                 Error.UnexpectedToken => {
-                    self.it.i -= 1;
+                    self.it.goBack();
                     _ = self.skipTokensUntil(EntryKeywords, false) catch {
                         self.addError(SyntaxError.nestingDepthReached(self.it.currentAssumeSafe().position));
                         return;
@@ -377,7 +367,7 @@ const Context = struct {
         try self.imports.append(self.allocator, .{
             .implicit = implicit,
             .alias = alias,
-            .path = try self.copyString(pathToken.kind.String),
+            .path = try pathToken.kind.String.toOwnedAndEscaped(self.allocator),
             .range = .{ .start = start, .endOffset = pathToken.endOffset() },
         });
     }
@@ -498,7 +488,7 @@ const Context = struct {
 
     inline fn buildEnumVariant(
         self: *Context,
-        nameToken: scanner.Token,
+        nameToken: tokenizer.Token,
         value: ?u32,
         documentation: ?ast.Documentation,
         options: []const ast.OptionAssignmentNode,
@@ -636,7 +626,7 @@ const Context = struct {
 
     inline fn buildField(
         self: *Context,
-        nameToken: scanner.Token,
+        nameToken: tokenizer.Token,
         documentation: ?ast.Documentation,
         options: []ast.OptionAssignmentNode,
         nullable: bool,
@@ -975,7 +965,7 @@ const Context = struct {
 
     inline fn buildFunc(
         self: *Context,
-        nameToken: scanner.Token,
+        nameToken: tokenizer.Token,
         options: []ast.OptionAssignmentNode,
         input: ?ast.FuncArg,
         output: ?ast.FuncArg,
@@ -1161,7 +1151,10 @@ const Context = struct {
                     self.addError(SyntaxError.rawStringOptionWithoutRawMarker(&keyToken));
                 }
                 self.consume();
-                break :blk ast.Selector.init(keyToken.kind.String, keyToken.range());
+                break :blk ast.Selector.init(
+                    try keyToken.kind.String.toOwnedAndEscaped(self.allocator),
+                    keyToken.range(),
+                );
             },
             .Identifier => try self.parseSelector(),
             else => {
@@ -1341,7 +1334,11 @@ const Context = struct {
                         };
                         if (self.parseValue()) |v| {
                             try values.append(if (next.kind == .String)
-                                .{ .key = try self.copyString(next.kind.String), .selector = false, .value = v.data }
+                                .{
+                                    .key = try next.kind.String.toOwnedAndEscaped(self.allocator),
+                                    .selector = false,
+                                    .value = v.data,
+                                }
                             else
                                 .{ .key = try self.copyString(next.literal), .selector = true, .value = v.data });
                             if (v.scopeExited) break :blk true;
@@ -1367,7 +1364,7 @@ const Context = struct {
         return switch (token.kind) {
             .String => .initOk(.{
                 .range = token.range(),
-                .value = .{ .String = try self.copyString(token.kind.String) },
+                .value = .{ .String = try token.kind.String.toOwnedAndEscaped(self.allocator) },
             }),
             .Integer => .initOk(.{
                 .range = token.range(),
@@ -1399,7 +1396,13 @@ const Context = struct {
         var contentSize: usize = 0;
         var tokenCount: u16 = 0;
 
-        const initialPosition = self.it.i;
+        const Segment = struct {
+            content: []const u8,
+            position: ast.Position,
+        };
+
+        var segments = StackArray(Segment, 20).init();
+
         while (self.it.next()) |token| {
             const expectIdentifier = tokenCount % 2 == 0;
             switch (token.kind) {
@@ -1407,8 +1410,12 @@ const Context = struct {
                     if (expectIdentifier) {
                         tokenCount += 1;
                         contentSize += token.literal.len;
+                        segments.append(.{
+                            .content = token.literal,
+                            .position = token.position,
+                        }) catch return Error.NestingDepthReached;
                     } else {
-                        self.it.i -= 1;
+                        self.it.goBack();
                         break;
                     }
                 },
@@ -1425,14 +1432,17 @@ const Context = struct {
                 else => if (expectIdentifier) {
                     self.addError(SyntaxError.expectToken(&token, "selector segment"));
                     return Error.UnexpectedToken;
-                } else break,
+                } else {
+                    self.it.goBack();
+                    break;
+                },
             }
         }
         if (tokenCount % 2 == 0) {
             // NB: Consume at least one token but go backwards if the unexpected token
             // comes after some other expected token.
             if (tokenCount > 0) {
-                self.it.i -= 1;
+                self.it.goBack();
             }
             if (self.it.peek(0)) |token| {
                 self.addError(SyntaxError.unexpectedToken(&token));
@@ -1442,70 +1452,68 @@ const Context = struct {
             return Error.UnexpectedToken;
         }
 
-        self.it.i = initialPosition;
         if (dotCount == 0) {
-            const segment = self.it.next().?;
-            return ast.Selector.init(try self.copyString(segment.literal), segment.range());
+            const segment = segments.buffer[0];
+            return ast.Selector.init(try self.copyString(segment.content), .{
+                .start = segment.position,
+                .endOffset = segment.position.offset + segment.content.len,
+            });
         }
 
         var builder = try ast.Selector.builder(self.allocator, contentSize, dotCount + 1);
-        for (0..tokenCount) |_| {
-            const token = self.it.next() orelse @panic("major bug in parseSelector, incorrect tokenCount used!");
-            if (std.meta.activeTag(token.kind) == .Identifier) {
-                builder.appendSegment(token.literal, token.position) catch
-                    @panic("major bug in parseSelector, too little allocation for the builder");
-            } else {
-                builder.appendSeparator() catch
-                    @panic("major bug in parseSelector, too little allocation for the builder");
-            }
+        var firstOne = true;
+        for (segments.slice()) |segment| {
+            if (!firstOne) {
+                builder.appendSeparator() catch @panic("poor calculation of token count");
+            } else firstOne = false;
+            builder.appendSegment(segment.content, segment.position) catch @panic("poor calculation of segment count");
         }
-        return builder.build(self.it.data[initialPosition].rangeUntilToken(self.it.data[self.it.i - 1]));
+
+        const lastOne = segments.buffer[segments.len - 1];
+        return builder.build(.{
+            .start = segments.buffer[0].position,
+            .endOffset = lastOne.position.offset + lastOne.content.len,
+        });
     }
 
-    fn parseDocumentationGroup(self: *Context) ?StagedDocumentation {
-        var startIndex: ?usize = null;
-        var lastDocIndex: usize = undefined;
-        var lastDocLine: u16 = undefined;
-        var totalContentSize: usize = 0;
+    fn parseDocumentationGroup(self: *Context) Allocator.Error!?StagedDocumentation {
+        var doc: StagedDocumentation = .init(&self.sharedStagedDocumentationStore);
         while (true) {
             const nextToken = self.it.peek(1) orelse break;
             switch (nextToken.kind) {
                 .Documentation => {
-                    if (startIndex == null) {
-                        startIndex = self.it.i;
-                    } else if (nextToken.position.line > lastDocLine + 1) {
+                    if (nextToken.position.line > doc.lastDocLine + 1 and doc.lastDocLine != 0) {
                         // documentations are too far apart.
                         break;
                     }
 
-                    lastDocIndex = self.it.i;
-                    lastDocLine = nextToken.position.line + nextToken.kind.Documentation.newlineCount;
-                    totalContentSize += nextToken.kind.Documentation.content.len + 1; // NB: 1 for the new line!
+                    if (doc.contentSize == 0) {
+                        doc.boundaries.clear(); // there is a documentation that needs capturing, clean the storage.
+                        doc.position = nextToken.position;
+                    }
+
+                    doc.lastDocLine = nextToken.position.line + nextToken.kind.Documentation.newlineCount;
+                    const content = nextToken.kind.Documentation.content;
+                    doc.contentSize += content.len + 1; // NB: 1 for the new line!
+                    try doc.boundaries.append(content);
                     self.consume();
                 },
                 .Comment => {
                     // don't include the comment but don't break the doc group.
-                    lastDocLine = nextToken.position.line;
+                    doc.lastDocLine = nextToken.position.line;
                     self.consume();
                 },
                 else => break,
             }
         }
 
-        if (totalContentSize > 0) {
-            return StagedDocumentation{
-                .startIndex = startIndex.?,
-                .endIndex = lastDocIndex,
-                .contentSize = totalContentSize,
-                .lastDocLine = lastDocLine,
-            };
-        } else return null;
+        return if (doc.contentSize > 0) doc else null;
     }
 
     fn captureDocumentationGroup(self: *Context) Allocator.Error!void {
-        if (self.parseDocumentationGroup()) |doc| {
+        if (try self.parseDocumentationGroup()) |doc| {
             if (self.stagedDocumentation) |stagedDoc| {
-                self.addError(SyntaxError.looseDocumentation(&self.it.data[stagedDoc.startIndex]));
+                self.addError(SyntaxError.looseDocumentation(stagedDoc));
             }
 
             self.stagedDocumentation = doc;
@@ -1529,11 +1537,11 @@ const Context = struct {
             return doc;
         }
 
-        if (self.parseDocumentationGroup()) |doc| {
+        if (try self.parseDocumentationGroup()) |doc| {
             token = self.it.peek(1) orelse return null;
             if (stagedDocumentationBelongsToLine(doc, token.position.line)) {
                 return try self.processStagedDocumentation(doc);
-            } else self.addError(SyntaxError.looseDocumentation(&token));
+            } else self.addError(SyntaxError.looseDocumentation(doc));
         }
 
         return null;
@@ -1541,15 +1549,12 @@ const Context = struct {
 
     fn processStagedDocumentation(self: *Context, stagedDoc: StagedDocumentation) Allocator.Error!ast.Documentation {
         var contentBuffer = try std.ArrayList(u8).initCapacity(self.allocator, stagedDoc.contentSize);
-        for (stagedDoc.startIndex..stagedDoc.endIndex + 1) |index| {
-            if (self.it.data[index].kind == .Documentation) {
-                contentBuffer.appendSliceAssumeCapacity(self.it.data[index].kind.Documentation.content);
-                contentBuffer.appendAssumeCapacity('\n');
-            }
+        var it = stagedDoc.boundaries.iterator();
+        while (it.next()) |boundary| {
+            contentBuffer.appendSliceAssumeCapacity(boundary);
+            contentBuffer.appendAssumeCapacity('\n');
         }
-        return ast.Documentation{
-            .content = contentBuffer.items,
-        };
+        return ast.Documentation{ .content = contentBuffer.items };
     }
 
     /// whether or not the next token is a top-level AST object captures documentation
@@ -1580,8 +1585,15 @@ const Context = struct {
 
     /// allocates precisely the amount necessary to store errors.
     fn buildErrors(self: Context) std.mem.Allocator.Error![]const SyntaxError {
-        const errors = try self.allocator.alloc(SyntaxError, self.errors.len);
-        @memcpy(errors, self.errors.slice());
+        const errors = try self.allocator.alloc(SyntaxError, self.errors.len + self.it.errors.len);
+        for (self.it.errors.slice(), 0..) |tokenError, i| {
+            errors[i] = SyntaxError{
+                .literal = tokenError.literal,
+                .message = tokenError.message,
+                .location = .{ .Position = tokenError.position },
+            };
+        }
+        @memcpy(errors[self.it.errors.len..], self.errors.slice());
         return errors;
     }
 
@@ -1589,7 +1601,7 @@ const Context = struct {
         self: *Context,
         comptime tag: TokenKindTag,
         comptime expectedToken: ?[]const u8,
-    ) !scanner.Token {
+    ) !tokenizer.Token {
         if (self.it.next()) |token| {
             if (std.meta.activeTag(token.kind) == tag) {
                 // in a successful match, if the token kind is a delimiter, handle the scope change.
@@ -1679,7 +1691,7 @@ const Context = struct {
         return false;
     }
 
-    inline fn consumeOptionalToken(self: *Context, tag: TokenKindTag) ?scanner.Token {
+    inline fn consumeOptionalToken(self: *Context, tag: TokenKindTag) ?tokenizer.Token {
         // ensure that no scope delimiter token gets used with this function.
         comptime if (std.mem.indexOfScalar(TokenKindTag, ScopeDelimiterTokens, tag)) |_| {
             @compileError(
@@ -1690,18 +1702,18 @@ const Context = struct {
 
         if (self.it.peek(1)) |token| {
             if (std.meta.activeTag(token.kind) == tag) {
-                defer self.consume();
-                return self.it.data[self.it.i];
+                self.it.consumeTokenAssumeSafe();
+                return token;
             }
         }
         return null;
     }
 
     inline fn consume(self: *Context) void {
-        self.it.i += 1;
+        self.it.consumeTokenAssumeSafe();
     }
 
-    inline fn peekNextOrError(self: *Context) error{UnexpectedEOF}!scanner.Token {
+    inline fn peekNextOrError(self: *Context) error{UnexpectedEOF}!tokenizer.Token {
         return self.it.peek(1) orelse {
             self.addError(SyntaxError.unexpectedEOF());
             return error.UnexpectedEOF;
@@ -1710,7 +1722,7 @@ const Context = struct {
 
     inline fn copyString(self: Context, ref: []const u8) Allocator.Error![]const u8 {
         const data = try self.allocator.alloc(u8, ref.len);
-        std.mem.copyForwards(u8, data, ref);
+        @memcpy(data, ref);
         return data;
     }
 
@@ -1813,7 +1825,7 @@ const Context = struct {
             return err;
         }
 
-        self.it.i -= 1; // revert the token consumption.
+        self.it.goBack(); // revert the token consumption.
         if (self.scopeDelimiterContext() > 0) {
             // NB: Inside a scope, go until you find next entry token or falling outside of the
             // current scope.
@@ -1835,7 +1847,7 @@ const Context = struct {
             return err;
         }
 
-        self.it.i -= 1; // revert the token consumption.
+        self.it.goBack(); // revert the token consumption.
         // NB: Inside a scope, go until you find next entry token or falling outside of the
         // current scope.
         return if (self.scopeDelimiterContext() > 0)
@@ -1899,7 +1911,7 @@ const Context = struct {
     }
 };
 
-const ParseError = scanner.TokenizeError;
+const ParseError = tokenizer.TokenizeError || Allocator.Error;
 
 pub const Result = struct {
     allocator: std.heap.ArenaAllocator,
@@ -1926,17 +1938,11 @@ pub fn parse(allocator: Allocator, content: []const u8, opts: Options) ParseErro
     var transientAllocator = std.heap.ArenaAllocator.init(opts.transientAllocator orelse allocator);
     defer transientAllocator.deinit();
 
-    var scanResult = try scanner.tokenize(allocator, content);
-    defer scanResult.deinit();
-
-    var ctx = Context.init(resultAllocator.allocator(), transientAllocator.allocator(), scanResult.tokens);
-    for (scanResult.errors) |scanError| {
-        ctx.addError(SyntaxError{
-            .message = scanError.message,
-            .literal = scanError.literal,
-            .location = .{ .Position = scanError.position },
-        });
-    }
+    var ctx = Context.init(
+        resultAllocator.allocator(),
+        transientAllocator.allocator(),
+        try tokenizer.tokenize(content),
+    );
     try ctx.parse();
 
     return .{
@@ -1954,42 +1960,4 @@ pub fn parse(allocator: Allocator, content: []const u8, opts: Options) ParseErro
             .documentation = ctx.documentation,
         },
     };
-}
-
-test "token-iterator" {
-    const t = std.testing;
-    const tokens = [_]scanner.Token{
-        .{
-            .kind = .Pact,
-            .position = ast.Position.empty(),
-            .literal = "",
-        },
-        .{
-            .kind = .Dot,
-            .position = ast.Position.empty(),
-            .literal = "",
-        },
-        .{
-            .kind = .Colon,
-            .position = ast.Position.empty(),
-            .literal = "",
-        },
-    };
-
-    var it = TokenIterator.init(tokens[0..]);
-
-    // test peek at current position.
-    try t.expectEqual(null, it.peek(0));
-    try t.expectEqual(tokens[0], it.peek(1).?);
-    try t.expectEqual(tokens[1], it.peek(2).?);
-    try t.expectEqual(tokens[2], it.peek(3).?);
-    try t.expectEqual(null, it.peek(4));
-
-    var index: usize = 0;
-    while (it.next()) |value| {
-        try t.expectEqual(tokens[index], value);
-        index += 1;
-    }
-
-    try t.expectEqual(null, it.peek(1));
 }
