@@ -28,8 +28,9 @@ pub fn StackArray(T: type, comptime count: usize) type {
             self.len = 0;
         }
 
-        pub fn capacity(self: Self) usize {
-            return self.buffer.len;
+        pub inline fn capacity(self: Self) usize {
+            _ = self;
+            return count;
         }
 
         pub fn pop(self: *Self) ?T {
@@ -96,6 +97,37 @@ pub fn StackFallbackArray(T: type, comptime count: usize) type {
             }
             return newBuffer;
         }
+
+        pub const Iterator = struct {
+            array: *const Self,
+            i: usize = 0,
+
+            pub fn next(self: *Iterator) ?T {
+                if (self.i >= count) {
+                    // heap array mode.
+                    const position = self.i - count;
+                    if (position >= self.array.heapArray.items.len)
+                        return null;
+                    defer self.i += 1;
+                    return self.array.heapArray.items[position];
+                } else {
+                    // stack array mode.
+                    if (self.i >= self.array.stackLen)
+                        return null;
+                    defer self.i += 1;
+                    return self.array.stackBuffer[self.i];
+                }
+            }
+        };
+
+        pub fn iterator(self: *const Self) Iterator {
+            return .{ .array = self };
+        }
+
+        pub fn deinit(self: *Self) void {
+            self.stackLen = 0;
+            self.heapArray.clearAndFree(self.allocator);
+        }
     };
 }
 
@@ -138,5 +170,26 @@ test "Stack Fallback Array" {
         const slice = try list.toOwnedSlice(t.allocator);
         try t.expectEqualSlices(usize, &.{ 1, 2, 3, 4, 5 }, slice);
         t.allocator.free(slice);
+    }
+
+    { // Iterator
+        var list = StackFallbackArray(usize, 5).init(t.allocator);
+        defer list.deinit();
+        for (0..3) |i| try list.append(i + 1); // fill up with stack, test the iterator.
+        var it = list.iterator();
+        try t.expectEqual(it.next(), 1);
+        try t.expectEqual(it.next(), 2);
+        try t.expectEqual(it.next(), 3);
+        try t.expectEqual(it.next(), null);
+
+        it = list.iterator();
+        for (3..6) |i| try list.append(i + 1); // now fill up the heap.
+        try t.expectEqual(it.next(), 1);
+        try t.expectEqual(it.next(), 2);
+        try t.expectEqual(it.next(), 3);
+        try t.expectEqual(it.next(), 4);
+        try t.expectEqual(it.next(), 5);
+        try t.expectEqual(it.next(), 6);
+        try t.expectEqual(it.next(), null);
     }
 }
