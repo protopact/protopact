@@ -456,10 +456,7 @@ pub const Iterator = struct {
                     switch (self.peekAscii() orelse break) {
                         '#' => {
                             self.consumeAscii(); // consume the #
-                            if (char == 'r')
-                                self.addToken(.RawHash)
-                            else
-                                self.addToken(.PrivateHash);
+                            self.addToken(if (char == 'r') .RawHash else .PrivateHash);
                             continue;
                         },
                         else => {},
