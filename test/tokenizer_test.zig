@@ -285,7 +285,7 @@ test "tokenize" {
     }
 }
 
-fn expectNoScanError(errors: []const tokenizer.ScanError) !void {
+fn expectNoScanError(errors: []const tokenizer.Error) !void {
     if (errors.len == 0) {
         return;
     }
@@ -328,7 +328,7 @@ test "positions" {
     const tests = &[_]TestCase{
         .{
             .source = "name = 'pactum'",
-            .expectation = "<Identifier:name|1,1><Equal|1,6><String:pactum|1,8><EOF|0,0>",
+            .expectation = "<Identifier:name|1,1><Equal|1,6><String:pactum|1,8><EOF|1,16>",
         },
         .{
             .source =
@@ -336,7 +336,7 @@ test "positions" {
             \\/** some single-line documentation */
             ,
             .expectation = "<Pact|1,1><Identifier:some|1,6><Dot|1,10><Identifier:package|1,11>" ++
-                "<Documentation: some single-line documentation :+0|2,1><EOF|0,0>",
+                "<Documentation: some single-line documentation :+0|2,1><EOF|2,38>",
         },
         .{
             .source =
@@ -346,17 +346,17 @@ test "positions" {
             \\  */
             ,
             .expectation = "<Pact|1,1><Identifier:some|1,6><Dot|1,10><Identifier:package|1,11>" ++
-                "<Documentation: some multi-line documentation:+2|2,1><EOF|0,0>",
+                "<Documentation: some multi-line documentation:+2|2,1><EOF|4,5>",
         },
         .{
             .source = "name = 'I love Unicode ⬣ !' 1.24",
             .expectation = "<Identifier:name|1,1><Equal|1,6><String:I love Unicode ⬣ !|1,8>" ++
-                "<Float:1.24|1,29><EOF|0,0>",
+                "<Float:1.24|1,29><EOF|1,33>",
         },
         .{
             .source = "name = 'a ⬣ b' /* comment ⬣ */ x = 1",
             .expectation = "<Identifier:name|1,1><Equal|1,6><String:a ⬣ b|1,8>" ++
-                "<Comment: comment ⬣ |1,16><Identifier:x|1,32><Equal|1,34><Integer:1|1,36><EOF|0,0>",
+                "<Comment: comment ⬣ |1,16><Identifier:x|1,32><Equal|1,34><Integer:1|1,36><EOF|1,37>",
         },
     };
 

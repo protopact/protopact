@@ -8,7 +8,6 @@ const StackFallbackArray = @import("stack_array.zig").StackFallbackArray;
 const Allocator = std.mem.Allocator;
 
 const Error = error{ UnexpectedToken, UnexpectedEOF, NestingDepthReached } || Allocator.Error;
-const FatalError = error{NestingDepthReached} || Allocator.Error;
 
 const OptionModifiers = struct {
     raw: bool,

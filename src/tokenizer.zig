@@ -1,6 +1,7 @@
 const ast = @import("ast.zig");
 const std = @import("std");
 const StackArray = @import("stack_array.zig").StackArray;
+const Allocator = std.mem.Allocator;
 
 const keywordTable = std.StaticStringMap(TokenKind).initComptime(.{
     .{ "pact", .Pact },
@@ -31,7 +32,7 @@ const keywordTable = std.StaticStringMap(TokenKind).initComptime(.{
     .{ "Func", .TargetFunc },
 });
 
-pub const ScanError = struct {
+pub const Error = struct {
     message: []const u8,
     // literal is the part of the source that is related to the error.
     literal: ?[]const u8,
@@ -103,7 +104,7 @@ pub const TokenKind = union(enum) {
         escape: enum(u3) { None, SingleQuotes, DoubleQuotes },
 
         const Self = @This();
-        pub fn toOwnedAndEscaped(self: Self, ally: std.mem.Allocator) std.mem.Allocator.Error![]u8 {
+        pub fn toOwnedAndEscaped(self: Self, ally: Allocator) Allocator.Error![]u8 {
             return switch (self.escape) {
                 .None => {
                     const data = try ally.alloc(u8, self.content.len);
@@ -153,11 +154,7 @@ pub const Token = struct {
         return self.position.offset + self.literal.len;
     }
 
-    fn eof() Token {
-        return .{ .kind = .EOF, .literal = "", .position = ast.Position.empty() };
-    }
-
-    pub fn debug(self: Token, ally: std.mem.Allocator, writer: *std.Io.Writer) !void {
+    pub fn debug(self: Token, ally: Allocator, writer: *std.Io.Writer) !void {
         return switch (self.kind) {
             .Documentation => {
                 var content = self.kind.Documentation.content;
@@ -211,9 +208,9 @@ pub const Token = struct {
 };
 
 const TokenList = StackArray(Token, 1024);
-const ErrorList = StackArray(ScanError, 10);
+const ErrorList = StackArray(Error, 10);
 pub const Iterator = struct {
-    /// position of the next token to read. This is an index meant for the tokens.
+    /// position of the next token to read in the tokens buffer.
     i: usize,
     it: std.unicode.Utf8Iterator,
     /// start is the byte position of the start pointer.
@@ -228,8 +225,8 @@ pub const Iterator = struct {
     tokens: TokenList,
     errors: ErrorList,
 
-    const ForwardPeekBuffer = 2;
-    const BackwardPeekBuffer = 2;
+    const ForwardPeekBufferSize = 2;
+    const BackwardPeekBufferSize = 2;
 
     fn init(it: std.unicode.Utf8Iterator) Iterator {
         return Iterator{
@@ -264,14 +261,14 @@ pub const Iterator = struct {
             self.startBoundary(); // NB: to ensure we only display the unicode character.
             _ = self.advanceUnicode() orelse {
                 // Unlikely event but received no unicode character either.
-                self.addError(ScanError.UnexpectedEOF);
+                self.addError(Error.UnexpectedEOF);
                 return null;
             };
-            self.addErrorForCurrentLexeme(ScanError.UnexpectedChar);
+            self.addErrorForCurrentLexeme(Error.UnexpectedChar);
             return null;
         } orelse {
             // No character available.
-            self.addError(ScanError.UnexpectedEOF);
+            self.addError(Error.UnexpectedEOF);
             return null;
         };
     }
@@ -359,7 +356,7 @@ pub const Iterator = struct {
         if (self.errors.len == self.errors.capacity()) {
             return;
         }
-        self.errors.appendAssumeCapacity(ScanError{
+        self.errors.appendAssumeCapacity(Error{
             .message = message,
             .position = self.currentPosition(),
             .literal = "",
@@ -370,7 +367,7 @@ pub const Iterator = struct {
         if (self.errors.len == self.errors.capacity()) {
             return;
         }
-        self.errors.appendAssumeCapacity(ScanError{
+        self.errors.appendAssumeCapacity(Error{
             .message = message,
             .position = self.currentPosition(),
             .literal = self.currentLexeme(),
@@ -391,22 +388,27 @@ pub const Iterator = struct {
         std.debug.assert(self.i >= 0);
     }
 
-    /// next calls automatically fill the token buffer if needed but if a peek operation is needed, this function
-    /// should get called first, otherwise the token buffer is empty. This is to retain the lazy mode of the iterator
-    /// without performing duplicative checks in peek operations.
+    /// Fills the token buffer if needed for peek operations.
+    ///
+    /// The `next()` method automatically fills the buffer when called, but `peek()`
+    /// operations require the buffer to be populated beforehand. Call this function
+    /// before peeking to ensure tokens are available.
+    ///
+    /// This design maintains lazy evaluation by avoiding redundant buffer checks
+    /// during peek operations.
     pub inline fn fillTokenBufferIfNeeded(self: *Iterator) void {
-        if (self.i + ForwardPeekBuffer >= self.tokens.len) {
+        if (self.i + ForwardPeekBufferSize >= self.tokens.len) {
             // NB: Either reached the end of the buffer and needs refilling or has reached end of file.
-            if (self.tokens.len == 0 or self.tokens.buffer[self.tokens.len - 1].kind != .EOF)
+            if (self.tokens.len == 0 or self.tokens.getLastAssumeSafe().kind != .EOF)
                 self.fillTokenBuffer();
         }
     }
 
     pub fn next(self: *Iterator) ?Token {
-        if (self.i + ForwardPeekBuffer >= self.tokens.len) {
+        if (self.i + ForwardPeekBufferSize >= self.tokens.len) {
             @branchHint(.unlikely);
             // NB: Either reached the end of the buffer and needs refilling or has reached end of file.
-            if (self.tokens.len == 0 or self.tokens.buffer[self.tokens.len - 1].kind != .EOF)
+            if (self.tokens.len == 0 or self.tokens.getLastAssumeSafe().kind != .EOF)
                 self.fillTokenBuffer()
             else if (self.tokens.len < self.tokens.capacity() and self.i < self.tokens.len) {
                 // NB: do nothing, buffer is actually full and does not need to refill and should drain to end.
@@ -430,13 +432,14 @@ pub const Iterator = struct {
 
     /// fills the token buffer leaving 2 items in history to allow going backwards.
     fn fillTokenBuffer(self: *Iterator) void {
-        if (self.tokens.len > BackwardPeekBuffer + ForwardPeekBuffer) {
+        const PeekBufferSize = ForwardPeekBufferSize + BackwardPeekBufferSize;
+        if (self.tokens.len > PeekBufferSize) {
             @memmove(
-                self.tokens.buffer[0..(BackwardPeekBuffer + ForwardPeekBuffer)],
-                self.tokens.buffer[self.tokens.len - (BackwardPeekBuffer + ForwardPeekBuffer) .. self.tokens.len],
+                self.tokens.buffer[0..PeekBufferSize],
+                self.tokens.buffer[self.tokens.len - PeekBufferSize .. self.tokens.len],
             );
-            self.tokens.len = BackwardPeekBuffer + ForwardPeekBuffer;
-            self.i = BackwardPeekBuffer;
+            self.tokens.len = PeekBufferSize;
+            self.i = BackwardPeekBufferSize;
         }
 
         while (self.tokens.len < self.tokens.capacity()) {
@@ -445,26 +448,18 @@ pub const Iterator = struct {
                 // capture the next unicode character and
                 // report unexpected unicode character.
                 _ = self.advanceUnicode() orelse return;
-                self.addErrorForCurrentLexeme(ScanError.UnexpectedChar);
+                self.addErrorForCurrentLexeme(Error.UnexpectedChar);
                 continue;
-            } orelse return self.tokens.appendAssumeCapacity(.{ .kind = .EOF, .literal = "", .position = .empty() });
-            // } orelse return self.addToken(.EOF);
-            // TODO: is this okay? we'd include the current position.
+            } orelse return self.addToken(.EOF);
             switch (char) {
                 'r', 'p' => {
                     switch (self.peekAscii() orelse break) {
                         '#' => {
                             self.consumeAscii(); // consume the #
-                            if (char == 'r') {
-                                self.addToken(.RawHash);
-                            } else {
+                            if (char == 'r')
+                                self.addToken(.RawHash)
+                            else
                                 self.addToken(.PrivateHash);
-                            }
-                            continue;
-                        },
-                        '`' => {
-                            self.consumeAscii();
-                            self.scanIdentifierLiteral();
                             continue;
                         },
                         else => {},
@@ -499,7 +494,7 @@ pub const Iterator = struct {
                         self.scanNumber();
                     } else {
                         self.start += 1; // NB: to generate the error for the last character.
-                        self.addErrorForCurrentLexeme(ScanError.UnexpectedChar);
+                        self.addErrorForCurrentLexeme(Error.UnexpectedChar);
                         continue;
                     }
                 },
@@ -515,7 +510,7 @@ pub const Iterator = struct {
                     } else if (std.ascii.isAlphanumeric(char)) {
                         self.scanIdentifier();
                     } else {
-                        self.addError(ScanError.UnexpectedChar);
+                        self.addError(Error.UnexpectedChar);
                     }
                 },
             }
@@ -537,7 +532,7 @@ pub const Iterator = struct {
         var needsToSkip = false; // if we need to replace quote skip characters.
         while (true) {
             const nextUnicode = self.advanceUnicode() orelse {
-                self.addErrorForCurrentLexeme(ScanError.UnterminatedString);
+                self.addErrorForCurrentLexeme(Error.UnterminatedString);
                 self.addToken(.{
                     .String = .{
                         .content = self.it.bytes[self.start + 1 .. self.current],
@@ -549,7 +544,7 @@ pub const Iterator = struct {
             if (nextUnicode.len == 1) switch (nextUnicode[0]) {
                 '\n' => {
                     self.current -= 1;
-                    self.addErrorForCurrentLexeme(ScanError.UnterminatedString);
+                    self.addErrorForCurrentLexeme(Error.UnterminatedString);
                     self.addToken(.{
                         .String = .{
                             .content = self.it.bytes[self.start + 1 .. self.current],
@@ -635,7 +630,7 @@ pub const Iterator = struct {
                 while (true) {
                     // NB: consume all characters until */ is discovered.
                     const nextChar = self.advanceUnicode() orelse {
-                        self.addErrorForCurrentLexeme(ScanError.UnterminatedMultiLineComment);
+                        self.addErrorForCurrentLexeme(Error.UnterminatedMultiLineComment);
                         return;
                     };
                     if (nextChar.len == 1) switch (nextChar[0]) {
@@ -677,7 +672,7 @@ pub const Iterator = struct {
                     });
                 }
             },
-            else => self.addErrorForCurrentLexeme(ScanError.UnexpectedChar),
+            else => self.addErrorForCurrentLexeme(Error.UnexpectedChar),
         }
     }
 
@@ -717,13 +712,13 @@ pub const Iterator = struct {
         if (isFloat) {
             const number = std.fmt.parseFloat(f64, self.currentLexeme()) catch {
                 self.addToken(.{ .Float = 0 });
-                return self.addErrorForCurrentLexeme(ScanError.InvalidFloatNumber);
+                return self.addErrorForCurrentLexeme(Error.InvalidFloatNumber);
             };
             self.addToken(.{ .Float = number });
         } else {
             const number = std.fmt.parseInt(i64, self.currentLexeme(), 10) catch {
                 self.addToken(.{ .Integer = 0 });
-                return self.addErrorForCurrentLexeme(ScanError.InvalidIntegerNumber);
+                return self.addErrorForCurrentLexeme(Error.InvalidIntegerNumber);
             };
             self.addToken(.{ .Integer = number });
         }
@@ -761,7 +756,7 @@ pub const Iterator = struct {
         self.start += 1; // skip the backtick.
         const nextChar = self.it.peek(1);
         if (nextChar.len != 1 or nextChar[0] != '`') {
-            return self.addError(ScanError.UnterminatedIdentifierLiteral);
+            return self.addError(Error.UnterminatedIdentifierLiteral);
         }
         self.addToken(.Identifier);
         self.consumeAscii(); // consume the backtick.
@@ -770,7 +765,7 @@ pub const Iterator = struct {
 
 pub const Result = struct {
     tokens: []const Token,
-    errors: []const ScanError,
+    errors: []const Error,
     allocator: std.heap.ArenaAllocator,
 
     pub fn deinit(self: *Result) void {
@@ -784,7 +779,7 @@ pub const Result = struct {
     /// debug returns a string representation for the Result.
     pub fn debug(
         self: *const Result,
-        ally: std.mem.Allocator,
+        ally: Allocator,
         writer: *std.Io.Writer,
     ) error{ OutOfMemory, WriteFailed }!void {
         for (self.tokens) |item| {
@@ -803,7 +798,7 @@ pub fn tokenize(data: []const u8) TokenizeError!Iterator {
     return Iterator.init(utf8View.iterator());
 }
 
-pub fn tokenizeAlloc(ally: std.mem.Allocator, data: []const u8) !Result {
+pub fn tokenizeAlloc(ally: Allocator, data: []const u8) !Result {
     var arena = std.heap.ArenaAllocator.init(ally);
     const allocator = arena.allocator();
 
@@ -812,7 +807,7 @@ pub fn tokenizeAlloc(ally: std.mem.Allocator, data: []const u8) !Result {
     while (it.next()) |token| try tokens.append(allocator, token);
 
     const errors = if (it.errors.len > 0) blk: {
-        const items = try allocator.alloc(ScanError, it.errors.len);
+        const items = try allocator.alloc(Error, it.errors.len);
         @memcpy(items, it.errors.slice());
         break :blk items;
     } else &.{};

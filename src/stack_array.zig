@@ -28,6 +28,10 @@ pub fn StackArray(T: type, comptime count: usize) type {
             self.len = 0;
         }
 
+        pub inline fn getLastAssumeSafe(self: Self) T {
+            return self.buffer[self.len - 1];
+        }
+
         pub inline fn capacity(self: Self) usize {
             _ = self;
             return count;
