@@ -128,6 +128,15 @@ pub fn StackFallbackArray(T: type, comptime count: usize) type {
             return .{ .array = self };
         }
 
+        pub inline fn getFirstAssumeSafe(self: Self) T {
+            return self.stackBuffer[0];
+        }
+
+        pub fn clear(self: *Self) void {
+            self.stackLen = 0;
+            self.heapArray.clearRetainingCapacity();
+        }
+
         pub fn deinit(self: *Self) void {
             self.stackLen = 0;
             self.heapArray.clearAndFree(self.allocator);

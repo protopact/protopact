@@ -20,17 +20,28 @@ const OptionModifiers = struct {
 
 /// Holds boundary for documentations along with the total content size so that
 /// it can be allocated all at once.
+///
+/// Staged documentation holds total content size, lastDocLine and the position of the documentation
+/// which are considered meta data and can be used to hold multiple instances of a staged documentation.
+///
+/// The storage for the actual content of the documentation is a pointer reference to a shared storage to
+/// reuse the same storage and heap allocated array and avoid unnecessary allocations since there can only
+/// be one staged documentation at a time.
 const StagedDocumentation = struct {
+    const Store = StackFallbackArray([]const u8, 10);
+
     /// documentation content boundaries, each slice represents a line documentation/multi-line documentation segment.
-    boundaries: StackFallbackArray([]const u8, 10),
+    boundaries: *Store,
     contentSize: usize,
     lastDocLine: u16,
+    position: ast.Position,
 
-    fn init(ally: std.mem.Allocator) StagedDocumentation {
+    fn init(storage: *Store) StagedDocumentation {
         return .{
-            .boundaries = .init(ally),
+            .boundaries = storage,
             .contentSize = 0,
             .lastDocLine = 0,
+            .position = .empty(),
         };
     }
 };
@@ -84,8 +95,8 @@ pub const SyntaxError = struct {
     fn looseDocumentation(doc: StagedDocumentation) SyntaxError {
         return .{
             .message = "unused documentation, use plain comments instead",
-            .literal = doc.boundaries.stackBuffer[0],
-            .location = Location{ .Range = .empty() }, // TODO: we might need to capture the range.
+            .literal = doc.boundaries.getFirstAssumeSafe(),
+            .location = Location{ .Position = doc.position },
         };
     }
 
@@ -189,6 +200,7 @@ const Context = struct {
     errors: ErrorList,
     scopeDelimiters: ScopeDelimiterList,
     stagedDocumentation: ?StagedDocumentation,
+    sharedStagedDocumentationStore: StagedDocumentation.Store,
 
     pact: ?ast.Selector,
     imports: std.ArrayList(ast.Import),
@@ -261,6 +273,7 @@ const Context = struct {
             .errors = ErrorList.init(),
             .scopeDelimiters = ScopeDelimiterList.init(),
             .stagedDocumentation = null,
+            .sharedStagedDocumentationStore = .init(transientAllocator),
             .pact = null,
             .imports = std.ArrayList(ast.Import).initCapacity(allocator, 0) catch unreachable,
             .options = std.ArrayList(ast.OptionAssignmentNode).initCapacity(allocator, 0) catch unreachable,
@@ -1400,7 +1413,7 @@ const Context = struct {
                         segments.append(.{
                             .content = token.literal,
                             .position = token.position,
-                        }) catch @panic("oops"); // TODO: fix this.
+                        }) catch return Error.NestingDepthReached;
                     } else {
                         self.it.goBack();
                         break;
@@ -1464,8 +1477,7 @@ const Context = struct {
     }
 
     fn parseDocumentationGroup(self: *Context) Allocator.Error!?StagedDocumentation {
-        // TODO: might need to revisit this because it can possibly use a shared stack.
-        var doc: StagedDocumentation = .init(self.transientAllocator);
+        var doc: StagedDocumentation = .init(&self.sharedStagedDocumentationStore);
         while (true) {
             const nextToken = self.it.peek(1) orelse break;
             switch (nextToken.kind) {
@@ -1473,6 +1485,11 @@ const Context = struct {
                     if (nextToken.position.line > doc.lastDocLine + 1 and doc.lastDocLine != 0) {
                         // documentations are too far apart.
                         break;
+                    }
+
+                    if (doc.contentSize == 0) {
+                        doc.boundaries.clear(); // there is a documentation that needs capturing, clean the storage.
+                        doc.position = nextToken.position;
                     }
 
                     doc.lastDocLine = nextToken.position.line + nextToken.kind.Documentation.newlineCount;
@@ -1693,8 +1710,7 @@ const Context = struct {
     }
 
     inline fn consume(self: *Context) void {
-        // TODO: maybe we don't need this, we can switch to self.it.consume()
-        self.it.i += 1;
+        self.it.consumeTokenAssumeSafe();
     }
 
     inline fn peekNextOrError(self: *Context) error{UnexpectedEOF}!tokenizer.Token {
