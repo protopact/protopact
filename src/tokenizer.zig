@@ -210,7 +210,7 @@ pub const Token = struct {
 const TokenList = StackArray(Token, 1024);
 const ErrorList = StackArray(Error, 10);
 pub const Iterator = struct {
-    /// position of the next token to read in the tokens buffer.
+    /// position of the next token in the tokens buffer.
     i: usize,
     it: std.unicode.Utf8Iterator,
     /// start is the byte position of the start pointer.
