@@ -1,10 +1,10 @@
 const std = @import("std");
 const t = std.testing;
 
-const pactum = @import("pactum");
-const ast = pactum.ast;
-const astcoder = pactum.astcoder;
-const parser = pactum.parser;
+const protopact = @import("protopact");
+const ast = protopact.ast;
+const astcoder = protopact.astcoder;
+const parser = protopact.parser;
 
 const Allocator = std.mem.Allocator;
 
