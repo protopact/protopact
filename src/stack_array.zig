@@ -20,7 +20,7 @@ pub fn StackArray(T: type, comptime count: usize) type {
             self.len += 1;
         }
 
-        pub inline fn slice(self: Self) []const T {
+        pub inline fn slice(self: *const Self) []const T {
             return self.buffer[0..self.len];
         }
 
@@ -28,11 +28,11 @@ pub fn StackArray(T: type, comptime count: usize) type {
             self.len = 0;
         }
 
-        pub inline fn getLastAssumeSafe(self: Self) T {
+        pub inline fn getLastAssumeSafe(self: *const Self) T {
             return self.buffer[self.len - 1];
         }
 
-        pub inline fn capacity(self: Self) usize {
+        pub inline fn capacity(self: *const Self) usize {
             _ = self;
             return count;
         }

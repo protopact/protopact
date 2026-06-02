@@ -24,7 +24,7 @@ pub fn main() !void {
         std.debug.print("\ntook {d}ms\n", .{@as(f32, @floatFromInt(diff)) / 1000.0});
         return;
     }
-    var marshaler = astcoder.YamlMarshaller{
+    const marshaler = astcoder.YamlMarshaller{
         .excludeZeroValues = true,
         .includeConstants = true,
         .expandSelectors = false,

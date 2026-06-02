@@ -326,11 +326,11 @@ pub const Iterator = struct {
         self.current += 1;
     }
 
-    inline fn currentLexeme(self: Iterator) []const u8 {
+    inline fn currentLexeme(self: *const Iterator) []const u8 {
         return self.it.bytes[self.start..self.current];
     }
 
-    inline fn currentPosition(self: Iterator) ast.Position {
+    inline fn currentPosition(self: *const Iterator) ast.Position {
         return .{
             .line = self.line,
             .column = self.columnStart,
@@ -374,7 +374,7 @@ pub const Iterator = struct {
         });
     }
 
-    pub fn peek(self: Iterator, i: usize) ?Token {
+    pub fn peek(self: *const Iterator, i: usize) ?Token {
         const cursor = self.i + i;
         if (cursor > self.tokens.len or cursor <= 0) {
             return null;
