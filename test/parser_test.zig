@@ -95,7 +95,7 @@ fn runTests(comptime sourceFileName: []const u8, opts: TestOptions) !void {
     defer allocator.deinit();
 
     var includedTests = std.StringHashMap(void).init(allocator.allocator());
-    if (std.posix.getenv("TEST_FILTER")) |filter| {
+    if (std.testing.environ.getPosix("TEST_FILTER")) |filter| {
         var it = std.mem.splitScalar(u8, filter, ',');
         while (it.next()) |name| {
             try includedTests.put(name, {});

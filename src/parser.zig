@@ -1732,7 +1732,7 @@ const Context = struct {
     }
 
     inline fn pushScopeDelimiter(self: *Context, delimiter: ScopeDelimiter) error{NestingDepthReached}!void {
-        self.scopeDelimiters.append(delimiter) catch return Error.NestingDepthReached;
+        self.scopeDelimiters.append(delimiter) catch return error.NestingDepthReached;
     }
 
     inline fn scopeDelimiterContext(self: Context) usize {
