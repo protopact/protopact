@@ -1,6 +1,6 @@
 const std = @import("std");
-const protopact = @import("protopact");
-const tokenizer = protopact.tokenizer;
+const pragma = @import("pragma");
+const tokenizer = pragma.tokenizer;
 
 test "tokenize" {
     const allocator = std.testing.allocator;

@@ -22,26 +22,26 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
     });
 
-    _ = b.addModule("protopact", .{
+    _ = b.addModule("pragma", .{
         .root_source_file = b.path("src/root.zig"),
         .target = target,
         .optimize = optimize,
     });
 
-    exe_mod.addImport("protopact", lib_mod);
-    test_mod.addImport("protopact", lib_mod);
+    exe_mod.addImport("pragma", lib_mod);
+    test_mod.addImport("pragma", lib_mod);
 
     // Library
     const lib = b.addLibrary(.{
         .linkage = .static,
-        .name = "protopact",
+        .name = "pragma",
         .root_module = lib_mod,
     });
     b.installArtifact(lib);
 
     // Executable
     const exe = b.addExecutable(.{
-        .name = "protopact",
+        .name = "pragma",
         .root_module = exe_mod,
     });
     b.installArtifact(exe);

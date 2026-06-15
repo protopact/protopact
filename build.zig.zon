@@ -1,8 +1,8 @@
 .{
-    .name = .protopact,
+    .name = .pragma,
     .version = "0.0.1",
-    .fingerprint = 0x35625e1bcbb4bf88,
-    .minimum_zig_version = "0.15.0",
+    .fingerprint = 0x1d16162a8d2811f3,
+    .minimum_zig_version = "0.16.0",
     .dependencies = .{},
     .paths = .{
         "build.zig",
