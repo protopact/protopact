@@ -1,21 +1,80 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 
-const code = @import("ast/code.zig");
+pub const KeyPath = @import("ast/KeyPath.zig");
+pub const Range = @import("ast/Range.zig");
 
-pub const Selector = @import("ast/Selector.zig");
-pub const Range = code.Range;
-pub const Position = code.Position;
+pub const Identifier = struct {
+    value: []const u8,
+    range: Range,
+};
 
-const dyn = @import("ast/dynamic_value.zig");
-pub const Value = dyn.Value;
-pub const RangedValue = dyn.RangedValue;
-pub const Entry = dyn.Entry;
+/// LiteralValue describes a value expressed directly in source code.
+/// This includes primitive types, collections, objects and references
+/// to language objects via @ref().
+pub const LiteralValue = union(enum) {
+    /// A UTF-8 string literal.
+    string: []const u8,
+    boolean: bool,
+    number: i64,
+    float: f64,
+    /// Represents the absence of a value.
+    none,
+    /// An ordered sequence of ranged literals.
+    array: []const RangedLiteral,
+    /// A map of key-value pairs. Keys are either strings or @ref() expressions.
+    object: []const Pair,
+    /// Reference to a language object via @ref().
+    ref: KeyPath,
+};
 
-const opts = @import("ast/options.zig");
-pub const OptionAssignmentNode = opts.OptionAssignmentNode;
+/// RangedLiteral pairs a LiteralValue with its source code range,
+/// used to preserve location information for diagnostics and tooling.
+pub const RangedLiteral = struct { literal: LiteralValue, range: Range };
 
-pub const Identifier = code.Ranged([]const u8);
+/// Entry represents a single key-value pair in an Object literal.
+pub const Pair = struct {
+    /// Key is the key of an Entry, either a plain string or a @ref() expression.
+    pub const Key = union(enum) {
+        /// A plain string key.
+        string: []const u8,
+        /// A reference to a language object used as a key.
+        ref: KeyPath,
+    };
+
+    key: Key,
+    value: RangedLiteral,
+};
+
+/// AssignmentNode describes an annotation setting, since annotations can be blocks or single assignments
+/// the value can either be a leaf or a tree.
+pub const AnnotationNode = struct {
+    const Flags = packed struct {
+        /// extra indicates whether or not the annotation is marked as extra.
+        extra: bool,
+        /// private means the annotation is marked as private.
+        private: bool,
+    };
+
+    pub const Value = union(enum) {
+        leaf: RangedLiteral,
+        group: []const AnnotationNode,
+    };
+
+    flags: Flags,
+
+    /// profiles can only be set when the private flag is set.
+    profiles: []const Identifier,
+
+    /// selector is the key used for the assignment. For instance in a.b = 1, "a.b" is the selector.
+    keypath: KeyPath,
+
+    /// value is the assigned value, which can be a group if a nested block is used or a single ranged value.
+    value: Value,
+
+    /// range captures the entire range of the option.
+    range: Range,
+};
 
 pub const Documentation = struct {
     content: []const u8,
@@ -23,10 +82,8 @@ pub const Documentation = struct {
 
 /// Import describes a single import statement.
 pub const Import = struct {
-    /// indicates whether or not the import statement is implicitly importing the package.
-    ///
-    /// In an implicit import, there is no need to use a prefix to import objects.
-    implicit: bool,
+    /// indicates whether or not the import statement is marked as bare (via # token).
+    bare: bool,
     /// if non-empty, it is the alias used to access the contents of the package.
     alias: []const u8,
     /// path to the package.
@@ -38,11 +95,11 @@ pub const Import = struct {
 /// Constant describes a named fixed value.
 pub const Constant = struct {
     /// name of the constant.
-    name: []const u8,
-    /// options assigned to the constant.
-    options: []OptionAssignmentNode,
+    name: Identifier,
+    /// annotations assigned to the constant.
+    annotations: []const AnnotationNode,
     /// value is the ranged value of the constant.
-    value: RangedValue,
+    value: RangedLiteral,
     /// range is the boundary of the statement in the source code.
     range: Range,
     /// captured documentation for the constant.
@@ -56,7 +113,7 @@ pub const EnumVariant = struct {
     /// optional explicit value assignment.
     value: ?u32,
     /// options assigned to the constant.
-    options: []const OptionAssignmentNode,
+    annotations: []const AnnotationNode,
     /// range is the boundary of the statement in the source code.
     range: Range,
     /// captured documentation for the variant.
@@ -68,7 +125,7 @@ pub const Enum = struct {
     /// name of the constant.
     name: Identifier,
     /// options assigned to the constant.
-    options: []const OptionAssignmentNode,
+    annotations: []const AnnotationNode,
     /// variants of the enum.
     variants: []const EnumVariant,
     /// range is the boundary of the statement in the source code.
@@ -77,40 +134,45 @@ pub const Enum = struct {
     documentation: ?Documentation,
 };
 
+// old
+
 /// Field holds all the information for a field inside a model.
 pub const Field = struct {
     /// name of the field as it appears in the input file.
     name: Identifier,
     /// field data type.
-    dataType: RangedDataType,
+    data_type: RangedDataType,
     /// optional explicit field tag assignment. This is a numerical identifier for this field.
     tag: ?u16,
     /// whether or not field can be null.
     nullable: bool,
     /// options assigned to the field.
-    options: []const OptionAssignmentNode,
+    annotations: []const AnnotationNode,
     /// range is the boundary of the statement in the source code.
     range: Range,
     /// captured documentation for the field.
     documentation: ?Documentation,
     /// the index of the one of group it belongs to, if any.
-    oneOfGroupIndex: ?u16,
+    oneof_group_index: ?u16,
 
     pub const DataType = union(enum) {
-        String: Selector,
-        List: Selector,
-        Map: MapTypeInfo,
-        OneOf: OneOfTypeInfo,
+        string: KeyPath,
+        list: KeyPath,
+        map: MapTypeInfo,
+        oneof: OneOfTypeInfo,
     };
     pub const OneOfTypeInfo = struct {
         fields: []const Field,
-        options: []const OptionAssignmentNode,
+        options: []const AnnotationNode,
     };
     pub const MapTypeInfo = struct {
-        key: Selector,
-        value: Selector,
+        key: KeyPath,
+        value: KeyPath,
     };
-    pub const RangedDataType = code.Ranged(DataType);
+    pub const RangedDataType = struct {
+        value: DataType,
+        range: Range,
+    };
 };
 
 /// OneOf describes a oneof group reference.
@@ -118,50 +180,50 @@ pub const OneOf = struct {
     /// name of the oneof group.
     name: Identifier,
     /// options assigned to the constant.
-    options: []const OptionAssignmentNode,
+    annotations: []const AnnotationNode,
     /// range is the boundary of the statement in the source code.
     range: Range,
 };
 
-/// Message describes a model.
-pub const Message = struct {
+/// Struct describes a data model.
+pub const Struct = struct {
     /// name of the constant.
     name: Identifier,
-    /// messages that are directly embedded into the message.
-    embeddedMessages: []const Selector,
-    /// options assigned to the message.
-    options: []const OptionAssignmentNode,
+    /// structs that are directly embedded into the struct.
+    embedded_structs: []const KeyPath,
+    /// annotations assigned to the struct.
+    annotations: []const AnnotationNode,
     /// all of the model fields.
     fields: []const Field,
     /// range is the boundary of the statement in the source code.
     range: Range,
-    oneOfGroups: []const OneOf,
-    /// captured documentation for the message.
+    oneof_groups: []const OneOf,
+    /// captured documentation for the struct.
     documentation: ?Documentation,
 };
 
-pub const OptionTarget = enum(u16) {
-    Pact,
+pub const AnnotationTarget = enum {
+    Package,
     Enum,
     EnumVariant,
     Field,
-    Interface,
+    Protocol,
     Func,
-    Message,
+    Struct,
     OneOf,
     Constant,
 };
 
-pub const OptionTargetSet = std.enums.EnumSet(OptionTarget);
+pub const AnnotationTargetSet = std.enums.EnumSet(AnnotationTarget);
 
-pub const OptionDefinition = struct {
-    targets: OptionTargetSet,
+pub const AnnotationDefinition = struct {
+    targets: AnnotationTargetSet,
     fields: []const Field,
     range: Range,
 };
 
 pub const FuncArg = struct {
-    name: Selector,
+    name: KeyPath,
     streaming: bool,
 };
 
@@ -170,33 +232,30 @@ pub const Func = struct {
     input: ?FuncArg,
     output: ?FuncArg,
     tag: ?u16,
-    options: []const OptionAssignmentNode,
+    annotations: []const AnnotationNode,
     /// range is the boundary of the statement in the source code.
     range: Range,
     /// captured documentation for the func.
     documentation: ?Documentation,
 };
 
-pub const Interface = struct {
+pub const Protocol = struct {
     name: Identifier,
     funcs: []const Func,
-    options: []const OptionAssignmentNode,
+    annotations: []const AnnotationNode,
     /// range is the boundary of the statement in the source code.
     range: Range,
     /// captured documentation for the func.
     documentation: ?Documentation,
 };
 
-/// Document describes a single pactum source file.
+/// Document describes a single pragma source file.
 pub const Document = struct {
-    /// the pact package designation.
-    pact: ?Selector,
-
     /// all of the imported packages in the document.
     imports: []const Import,
 
-    /// options are all of the document option assignments.
-    options: []const OptionAssignmentNode,
+    /// annotations for the current package.
+    annotations: []const AnnotationNode,
 
     /// constants are fixed value literals.
     constants: []const Constant,
@@ -204,29 +263,24 @@ pub const Document = struct {
     /// enums are types that can assume a limited set of values.
     enums: []const Enum,
 
-    /// messages are the models defined in the file.
-    messages: []const Message,
+    /// structs that are defined in the document.
+    structs: []const Struct,
 
     /// option definitions declared in the document.
-    optionDefinitions: []const OptionDefinition,
+    annotation_definitions: []const AnnotationDefinition,
+    protocols: []const Protocol,
 
-    /// interfaces denote a service or a collection of functions.
-    interfaces: []const Interface,
-
-    /// captured documentation for the pact.
+    /// captured documentation for the pragma package (should not conflict).
     documentation: ?Documentation,
 
-    pub fn empty() Document {
-        return .{
-            .pact = null,
-            .imports = &[_]Import{},
-            .options = &[_]OptionAssignmentNode{},
-            .constants = &[_]Constant{},
-            .enums = &[_]Enum{},
-            .messages = &[_]Message{},
-            .optionDefinitions = &[_]OptionDefinition{},
-            .interfaces = &[_]Interface{},
-            .documentation = null,
-        };
-    }
+    pub const empty: Document = .{
+        .imports = &.{},
+        .annotations = &.{},
+        .constants = &.{},
+        .enums = &.{},
+        .structs = &.{},
+        .annotation_definitions = &.{},
+        .protocols = &.{},
+        .documentation = null,
+    };
 };

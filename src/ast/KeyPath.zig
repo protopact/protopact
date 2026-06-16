@@ -1,37 +1,35 @@
 //! Selector is a dot-separated path that can be iterated over.
 
 const std = @import("std");
-const code = @import("code.zig");
 
 const Allocator = std.mem.Allocator;
-const Range = code.Range;
-const Position = code.Position;
+const Range = @import("Range.zig");
 const Self = @This();
 
 content: []const u8,
 markers: []const SegmentMarker,
 range: Range,
 
-/// SelectorSegmentInfo describes a single segment in a selector.
+/// SelectorSegmentInfo describes a single segment in a keypath.
 const SegmentMarker = struct {
-    /// index is the byte position of the segment in the content.
+    /// Byte position of the segment in the content.
     index: usize,
-    /// position is the position of the segment in the source file.
-    position: Position,
+    /// Inclusive byte offset of the segment in the source file.
+    start: usize,
 };
 
 pub const Segment = struct {
     content: []const u8,
-    position: *const Position,
+    range: Range,
 };
 
 pub const Iterator = struct {
     content: []const u8,
     markers: []const SegmentMarker,
-    start: *const Position,
+    start: usize,
     i: usize,
 
-    fn init(content: []const u8, markers: []const SegmentMarker, start: *const Position) Iterator {
+    fn init(content: []const u8, markers: []const SegmentMarker, start: usize) Iterator {
         return .{
             .content = content,
             .start = start,
@@ -46,7 +44,7 @@ pub const Iterator = struct {
                 self.i += 1;
                 return Segment{
                     .content = self.content,
-                    .position = self.start,
+                    .range = .{ .start = self.start, .end = self.content.len },
                 };
             }
             return null;
@@ -55,16 +53,20 @@ pub const Iterator = struct {
         defer self.i += 1;
         if (self.i + 1 >= self.markers.len) {
             // last segment!
+            const content = self.content[self.markers[self.i].index..];
+            const start = self.markers[self.i].start;
             return Segment{
-                .content = self.content[self.markers[self.i].index..],
-                .position = &(self.markers[self.i].position),
+                .content = content,
+                .range = .{ .start = start, .end = start + content.len },
             };
         } else {
             // pull the next segment.
-            const nextMarker = self.markers[self.i + 1];
+            const next_marker = self.markers[self.i + 1];
+            const content = self.content[self.markers[self.i].index .. next_marker.index - 1];
+            const start = self.markers[self.i].start;
             return Segment{
-                .content = self.content[self.markers[self.i].index .. nextMarker.index - 1],
-                .position = &(self.markers[self.i].position),
+                .content = content,
+                .range = .{ .start = start, .end = start + content.len },
             };
         }
     }
@@ -83,7 +85,7 @@ const Builder = struct {
         };
     }
 
-    pub fn appendSegment(self: *Builder, segment: []const u8, position: Position) BuilderError!void {
+    pub fn appendSegment(self: *Builder, segment: []const u8, start: usize) BuilderError!void {
         const noRoomForContent = self.content.items.len + segment.len > self.content.capacity;
         const noRoomForMarker = self.markers.items.len >= self.markers.capacity;
         if (noRoomForContent or noRoomForMarker) {
@@ -92,7 +94,7 @@ const Builder = struct {
 
         self.markers.appendAssumeCapacity(.{
             .index = self.content.items.len,
-            .position = position,
+            .start = start,
         });
         self.content.appendSliceAssumeCapacity(segment);
     }
@@ -105,7 +107,7 @@ const Builder = struct {
         self.content.appendAssumeCapacity('.');
     }
 
-    /// build creates a selector with the original allocator.
+    /// build creates a keypath with the original allocator.
     pub fn build(self: Builder, range: Range) Self {
         return .{
             .content = self.content.items,
@@ -115,11 +117,12 @@ const Builder = struct {
     }
 };
 
+/// Create a single segment keypath.
 pub fn init(segment: []const u8, range: Range) Self {
     return .{
         .content = segment,
         .range = range,
-        .markers = &[_]SegmentMarker{},
+        .markers = &.{},
     };
 }
 
@@ -128,7 +131,7 @@ pub fn builder(allocator: Allocator, contentSize: usize, segmentCount: usize) Al
 }
 
 pub fn iterator(self: *const Self) Iterator {
-    return Iterator.init(self.content, self.markers, &self.range.start);
+    return Iterator.init(self.content, self.markers, self.range.start);
 }
 
 fn expectIterator(it: *Iterator, items: []const []const u8) !void {
@@ -144,14 +147,14 @@ fn expectIterator(it: *Iterator, items: []const []const u8) !void {
     try t.expectEqual(null, next);
 }
 
-test "selector single segment" {
-    const selector = init("single", Range.empty());
-    var it = selector.iterator();
+test "keypath single segment" {
+    const keypath = init("single", Range.zero);
+    var it = keypath.iterator();
 
     try expectIterator(&it, &[_][]const u8{"single"});
 }
 
-test "selector multi segment" {
+test "keypath multi segment" {
     const t = std.testing;
 
     var arena = std.heap.ArenaAllocator.init(t.allocator);
@@ -159,19 +162,19 @@ test "selector multi segment" {
 
     var b = try builder(arena.allocator(), comptime "name.x.y".len, 3);
 
-    try b.appendSegment("name", .empty());
+    try b.appendSegment("name", 0);
     try b.appendSeparator();
-    try b.appendSegment("x", .empty());
+    try b.appendSegment("x", 0);
     try b.appendSeparator();
-    try b.appendSegment("y", .empty());
+    try b.appendSegment("y", 0);
 
-    const selector = b.build(.{ .start = .empty(), .endOffset = 0 });
-    var it = selector.iterator();
+    const keypath = b.build(.zero);
+    var it = keypath.iterator();
 
-    try expectIterator(&it, &[_][]const u8{ "name", "x", "y" });
+    try expectIterator(&it, &.{ "name", "x", "y" });
 }
 
-test "selector multi segment edge" {
+test "keypath multi segment edge" {
     const t = std.testing;
 
     var arena = std.heap.ArenaAllocator.init(t.allocator);
@@ -179,28 +182,28 @@ test "selector multi segment edge" {
 
     var b = try builder(arena.allocator(), comptime "name.x.y".len, 3);
 
-    try b.appendSegment("name", .empty());
+    try b.appendSegment("name", 0);
     try b.appendSeparator();
-    try b.appendSegment("x", .empty());
+    try b.appendSegment("x", 0);
 
     { // don't use all the items
-        const selector = b.build(.{ .start = .empty(), .endOffset = 0 });
-        var it = selector.iterator();
+        const keypath = b.build(.zero);
+        var it = keypath.iterator();
 
-        try expectIterator(&it, &[_][]const u8{ "name", "x" });
+        try expectIterator(&it, &.{ "name", "x" });
     }
 
     // too many
     try b.appendSeparator();
-    try t.expectError(BuilderError.OutOfRoom, b.appendSegment("yy", .empty()));
-    try b.appendSegment("y", .empty());
+    try t.expectError(BuilderError.OutOfRoom, b.appendSegment("yy", 0));
+    try b.appendSegment("y", 0);
     // too many with separator
     try t.expectError(BuilderError.OutOfRoom, b.appendSeparator());
 
     { // should still be able to use the builder
-        const selector = b.build(.{ .start = .empty(), .endOffset = 0 });
-        var it = selector.iterator();
+        const keypath = b.build(.zero);
+        var it = keypath.iterator();
 
-        try expectIterator(&it, &[_][]const u8{ "name", "x", "y" });
+        try expectIterator(&it, &.{ "name", "x", "y" });
     }
 }

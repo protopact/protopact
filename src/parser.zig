@@ -207,9 +207,9 @@ const Context = struct {
     options: std.ArrayList(ast.OptionAssignmentNode),
     constants: std.ArrayList(ast.Constant),
     enums: std.ArrayList(ast.Enum),
-    messages: std.ArrayList(ast.Message),
-    optionDefinitions: std.ArrayList(ast.OptionDefinition),
-    interfaces: std.ArrayList(ast.Interface),
+    messages: std.ArrayList(ast.Struct),
+    optionDefinitions: std.ArrayList(ast.AnnotationDefinition),
+    interfaces: std.ArrayList(ast.Protocol),
     documentation: ?ast.Documentation,
 
     const EntryKeywords: []const TokenKindTag = &.{
@@ -279,9 +279,9 @@ const Context = struct {
             .options = std.ArrayList(ast.OptionAssignmentNode).initCapacity(allocator, 0) catch unreachable,
             .constants = std.ArrayList(ast.Constant).initCapacity(allocator, 0) catch unreachable,
             .enums = std.ArrayList(ast.Enum).initCapacity(allocator, 0) catch unreachable,
-            .messages = std.ArrayList(ast.Message).initCapacity(allocator, 0) catch unreachable,
-            .optionDefinitions = std.ArrayList(ast.OptionDefinition).initCapacity(allocator, 0) catch unreachable,
-            .interfaces = std.ArrayList(ast.Interface).initCapacity(allocator, 0) catch unreachable,
+            .messages = std.ArrayList(ast.Struct).initCapacity(allocator, 0) catch unreachable,
+            .optionDefinitions = std.ArrayList(ast.AnnotationDefinition).initCapacity(allocator, 0) catch unreachable,
+            .interfaces = std.ArrayList(ast.Protocol).initCapacity(allocator, 0) catch unreachable,
             .documentation = null,
         };
     }
@@ -365,7 +365,7 @@ const Context = struct {
             return self.recover(err, &.{ .String, .Underscore, .Identifier }, true);
         };
         try self.imports.append(self.allocator, .{
-            .implicit = implicit,
+            .bare = implicit,
             .alias = alias,
             .path = try pathToken.kind.String.toOwnedAndEscaped(self.allocator),
             .range = .{ .start = start, .endOffset = pathToken.endOffset() },
@@ -388,7 +388,7 @@ const Context = struct {
             .name = try self.copyString(name),
             .value = value,
             .documentation = documentation,
-            .options = options,
+            .annotations = options,
             .range = .{ .start = start, .endOffset = self.it.currentAssumeSafe().endOffset() },
         });
     }
@@ -481,7 +481,7 @@ const Context = struct {
             },
             .variants = try variants.toOwnedSlice(self.allocator),
             .documentation = documentation,
-            .options = try options.toOwnedSlice(self.allocator),
+            .annotations = try options.toOwnedSlice(self.allocator),
             .range = .{ .start = nameToken.position, .endOffset = self.it.currentAssumeSafe().endOffset() },
         });
     }
@@ -500,7 +500,7 @@ const Context = struct {
             },
             .value = value,
             .documentation = documentation,
-            .options = options,
+            .annotations = options,
             .range = .{
                 .start = nameToken.position,
                 .endOffset = self.it.currentAssumeSafe().endOffset(),
@@ -587,7 +587,7 @@ const Context = struct {
                                 .value = try self.copyString(oneOfNameToken.literal),
                                 .range = nameToken.range(),
                             },
-                            .options = v.data.options,
+                            .annotations = v.data.options,
                             .range = ast.Range{
                                 .start = start,
                                 .endOffset = self.it.currentAssumeSafe().endOffset(),
@@ -610,16 +610,16 @@ const Context = struct {
             _ = self.consumeOptionalTokenBool(.Comma);
         }
 
-        try self.messages.append(self.allocator, ast.Message{
+        try self.messages.append(self.allocator, ast.Struct{
             .name = ast.Identifier{
                 .value = try self.copyString(nameToken.literal),
                 .range = nameToken.range(),
             },
-            .embeddedMessages = try embeddedMessages.toOwnedSlice(self.allocator),
+            .embedded_structs = try embeddedMessages.toOwnedSlice(self.allocator),
             .documentation = documentation,
             .fields = try fields.toOwnedSlice(self.allocator),
-            .options = try options.toOwnedSlice(self.allocator),
-            .oneOfGroups = try oneOfGroups.toOwnedSlice(self.allocator),
+            .annotations = try options.toOwnedSlice(self.allocator),
+            .oneof_groups = try oneOfGroups.toOwnedSlice(self.allocator),
             .range = .{ .start = nameToken.position, .endOffset = self.it.currentAssumeSafe().endOffset() },
         });
     }
@@ -640,15 +640,15 @@ const Context = struct {
                 .range = nameToken.range(),
             },
             .documentation = documentation,
-            .options = options,
+            .annotations = options,
             .nullable = nullable,
             .range = ast.Range{
                 .start = nameToken.position,
                 .endOffset = self.it.currentAssumeSafe().endOffset(),
             },
             .tag = tag,
-            .dataType = dataType,
-            .oneOfGroupIndex = oneOfGroupIndex,
+            .data_type = dataType,
+            .oneof_group_index = oneOfGroupIndex,
         };
     }
 
@@ -841,7 +841,7 @@ const Context = struct {
         const start = self.it.currentAssumeSafe().position;
         _ = try self.consumeRequiredToken(.For, "for");
 
-        var targetSet = ast.OptionTargetSet.init(.{});
+        var targetSet = ast.AnnotationTargetSet.init(.{});
         targetSet.insert(try self.parseOptionTarget());
         while (true) {
             const nextToken = try self.peekNextOrError();
@@ -871,7 +871,7 @@ const Context = struct {
             }
         }
 
-        try self.optionDefinitions.append(self.allocator, ast.OptionDefinition{
+        try self.optionDefinitions.append(self.allocator, ast.AnnotationDefinition{
             .targets = targetSet,
             .fields = try fields.toOwnedSlice(self.allocator),
             .range = .{
@@ -881,21 +881,21 @@ const Context = struct {
         });
     }
 
-    inline fn parseOptionTarget(self: *Context) Error!ast.OptionTarget {
+    inline fn parseOptionTarget(self: *Context) Error!ast.AnnotationTarget {
         const targetToken = self.it.next() orelse {
             self.addError(SyntaxError.unexpectedEOF());
             return Error.UnexpectedEOF;
         };
         switch (targetToken.kind) {
-            .TargetPact => return ast.OptionTarget.Pact,
-            .TargetOneOf => return ast.OptionTarget.OneOf,
-            .TargetEnum => return ast.OptionTarget.Enum,
-            .TargetConst => return ast.OptionTarget.Constant,
-            .TargetEnumVariant => return ast.OptionTarget.EnumVariant,
-            .TargetMessage => return ast.OptionTarget.Message,
-            .TargetField => return ast.OptionTarget.Field,
-            .TargetInterface => return ast.OptionTarget.Interface,
-            .TargetFunc => return ast.OptionTarget.Func,
+            .TargetPact => return ast.AnnotationTarget.Package,
+            .TargetOneOf => return ast.AnnotationTarget.OneOf,
+            .TargetEnum => return ast.AnnotationTarget.Enum,
+            .TargetConst => return ast.AnnotationTarget.Constant,
+            .TargetEnumVariant => return ast.AnnotationTarget.EnumVariant,
+            .TargetMessage => return ast.AnnotationTarget.Struct,
+            .TargetField => return ast.AnnotationTarget.Field,
+            .TargetInterface => return ast.AnnotationTarget.Protocol,
+            .TargetFunc => return ast.AnnotationTarget.Func,
             else => {
                 self.addError(SyntaxError.expectToken(&targetToken, "option target"));
                 return Error.UnexpectedToken;
@@ -948,14 +948,14 @@ const Context = struct {
             }
         }
 
-        try self.interfaces.append(self.allocator, ast.Interface{
+        try self.interfaces.append(self.allocator, ast.Protocol{
             .name = ast.Identifier{
                 .value = try self.copyString(nameToken.literal),
                 .range = nameToken.range(),
             },
             .funcs = try funcs.toOwnedSlice(self.allocator),
             .documentation = documentation,
-            .options = try options.toOwnedSlice(self.allocator),
+            .annotations = try options.toOwnedSlice(self.allocator),
             .range = ast.Range{
                 .start = nameToken.position,
                 .endOffset = self.it.currentAssumeSafe().endOffset(),
@@ -977,7 +977,7 @@ const Context = struct {
                 .value = try self.copyString(nameToken.literal),
                 .range = nameToken.range(),
             },
-            .options = options,
+            .annotations = options,
             .input = input,
             .output = output,
             .documentation = documentation,
@@ -1314,7 +1314,7 @@ const Context = struct {
     fn parseValueObject(self: *Context) Error!ParseResult(ast.RangedValue) {
         const ObjectRecoveryPoints: []const TokenKindTag = &.{ .String, .Identifier, .Comma };
         try self.pushScopeDelimiter(.CurlyBrace);
-        var values = StackFallbackArray(ast.Entry, 20).init(self.transientAllocator);
+        var values = StackFallbackArray(ast.Pair, 20).init(self.transientAllocator);
         const start = self.it.currentAssumeSafe().position;
         const currentScope = self.scopeDelimiterContext();
 
@@ -1951,12 +1951,12 @@ pub fn parse(allocator: Allocator, content: []const u8, opts: Options) ParseErro
         .document = .{
             .pact = ctx.pact,
             .imports = ctx.imports.items,
-            .options = ctx.options.items,
+            .annotations = ctx.options.items,
             .constants = ctx.constants.items,
             .enums = ctx.enums.items,
-            .messages = ctx.messages.items,
-            .optionDefinitions = ctx.optionDefinitions.items,
-            .interfaces = ctx.interfaces.items,
+            .structs = ctx.messages.items,
+            .annotation_definitions = ctx.optionDefinitions.items,
+            .protocols = ctx.interfaces.items,
             .documentation = ctx.documentation,
         },
     };

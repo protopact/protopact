@@ -240,7 +240,7 @@ const Context = struct {
             self.incrIndent();
             defer self.decrIndent();
             try self.writeKey("implicit");
-            try self.writer.print(" {any}", .{import.implicit});
+            try self.writer.print(" {any}", .{import.bare});
             try self.writeKey("path");
             try self.writer.print(" \"{s}\"", .{import.path});
             if (self.includeRange) {
@@ -308,9 +308,9 @@ const Context = struct {
             try self.writeKey("value");
             try self.writeValue(&constant.value);
 
-            if (constant.options.len > 0 or !self.excludeZeroValues) {
+            if (constant.annotations.len > 0 or !self.excludeZeroValues) {
                 try self.writeKey("options");
-                try self.writeOptions(constant.options, false);
+                try self.writeOptions(constant.annotations, false);
             }
         }
         try self.writeNewLine();
@@ -338,9 +338,9 @@ const Context = struct {
             try self.writer.writeAll(LiteralNone);
         }
 
-        if (variant.options.len > 0 or !self.excludeZeroValues) {
+        if (variant.annotations.len > 0 or !self.excludeZeroValues) {
             try self.writeKey("options");
-            try self.writeOptions(variant.options, false);
+            try self.writeOptions(variant.annotations, false);
         }
     }
 
@@ -365,9 +365,9 @@ const Context = struct {
                 try self.writeRange(enumType.range);
             }
 
-            if (enumType.options.len > 0 or !self.excludeZeroValues) {
+            if (enumType.annotations.len > 0 or !self.excludeZeroValues) {
                 try self.writeKey("options");
-                try self.writeOptions(enumType.options, false);
+                try self.writeOptions(enumType.annotations, false);
             }
 
             if (enumType.variants.len > 0 or !self.excludeZeroValues) {
@@ -433,7 +433,7 @@ const Context = struct {
             try self.writeRange(field.range);
         }
 
-        try self.writeDataType(field.dataType);
+        try self.writeDataType(field.data_type);
 
         if (field.tag) |tag| {
             try self.writeKey("tag");
@@ -447,14 +447,14 @@ const Context = struct {
         try self.writeKey("nullable");
         try self.writer.print(" {any}", .{field.nullable});
 
-        if (field.oneOfGroupIndex) |index| {
+        if (field.oneof_group_index) |index| {
             try self.writeKey("oneof_group_index");
             try self.writer.print(" {d}", .{index});
         }
 
-        if (field.options.len > 0 or !self.excludeZeroValues) {
+        if (field.annotations.len > 0 or !self.excludeZeroValues) {
             try self.writeKey("options");
-            try self.writeOptions(field.options, false);
+            try self.writeOptions(field.annotations, false);
         }
     }
 
@@ -469,13 +469,13 @@ const Context = struct {
             try self.writeRange(oneOf.range);
         }
 
-        if (oneOf.options.len > 0 or !self.excludeZeroValues) {
+        if (oneOf.annotations.len > 0 or !self.excludeZeroValues) {
             try self.writeKey("options");
-            try self.writeOptions(oneOf.options, false);
+            try self.writeOptions(oneOf.annotations, false);
         }
     }
 
-    fn writeMessage(self: *Self, message: ast.Message) !void {
+    fn writeMessage(self: *Self, message: ast.Struct) !void {
         try self.writeKey("- name");
         try self.writer.print(" \"{s}\"", .{message.name.value});
         self.incrIndent();
@@ -488,26 +488,26 @@ const Context = struct {
             try self.writeRange(message.range);
         }
 
-        if (message.embeddedMessages.len > 0 or !self.excludeZeroValues) {
+        if (message.embedded_structs.len > 0 or !self.excludeZeroValues) {
             try self.writeKey("embedded_messages");
             self.incrIndent();
             defer self.decrIndent();
-            for (message.embeddedMessages) |embeddedMsg| {
+            for (message.embedded_structs) |embeddedMsg| {
                 try self.writeArrayPrefix();
                 try self.writeSelector(embeddedMsg);
             }
         }
 
-        if (message.options.len > 0 or !self.excludeZeroValues) {
+        if (message.annotations.len > 0 or !self.excludeZeroValues) {
             try self.writeKey("options");
-            try self.writeOptions(message.options, false);
+            try self.writeOptions(message.annotations, false);
         }
 
-        if (message.oneOfGroups.len > 0 or !self.excludeZeroValues) {
+        if (message.oneof_groups.len > 0 or !self.excludeZeroValues) {
             try self.writeKey("oneof_groups");
             self.incrIndent();
             defer self.decrIndent();
-            for (message.oneOfGroups) |oneOf| {
+            for (message.oneof_groups) |oneOf| {
                 try self.writeOneOf(oneOf);
             }
         }
@@ -522,7 +522,7 @@ const Context = struct {
         }
     }
 
-    fn writeMessages(self: *Self, messages: []const ast.Message) !void {
+    fn writeMessages(self: *Self, messages: []const ast.Struct) !void {
         if (!self.includeMessages or (self.excludeZeroValues and messages.len == 0)) {
             return;
         }
@@ -536,7 +536,7 @@ const Context = struct {
         try self.writeNewLine();
     }
 
-    fn writeOptionTargets(self: *Self, targets: ast.OptionTargetSet) !void {
+    fn writeOptionTargets(self: *Self, targets: ast.AnnotationTargetSet) !void {
         try self.writeKey("targets");
         self.incrIndent();
         defer self.decrIndent();
@@ -603,13 +603,13 @@ const Context = struct {
             try self.writer.writeAll(LiteralNone);
         }
 
-        if (func.options.len > 0 or !self.excludeZeroValues) {
+        if (func.annotations.len > 0 or !self.excludeZeroValues) {
             try self.writeKey("options");
-            try self.writeOptions(func.options, false);
+            try self.writeOptions(func.annotations, false);
         }
     }
 
-    fn writeOptionDefinition(self: *Self, optDef: ast.OptionDefinition) !void {
+    fn writeOptionDefinition(self: *Self, optDef: ast.AnnotationDefinition) !void {
         self.incrIndent();
         defer self.decrIndent();
 
@@ -630,7 +630,7 @@ const Context = struct {
         }
     }
 
-    fn writeOptionDefinitions(self: *Self, optionDefinitions: []const ast.OptionDefinition) !void {
+    fn writeOptionDefinitions(self: *Self, optionDefinitions: []const ast.AnnotationDefinition) !void {
         if (!self.includeOptionDefinitions or (self.excludeZeroValues and optionDefinitions.len == 0)) {
             return;
         }
@@ -645,7 +645,7 @@ const Context = struct {
         try self.writeNewLine();
     }
 
-    fn writeInterface(self: *Self, interface: ast.Interface) !void {
+    fn writeInterface(self: *Self, interface: ast.Protocol) !void {
         try self.writeKey("- name");
         try self.writer.print(" \"{s}\"", .{interface.name.value});
         self.incrIndent();
@@ -658,9 +658,9 @@ const Context = struct {
             try self.writeRange(interface.range);
         }
 
-        if (interface.options.len > 0 or !self.excludeZeroValues) {
+        if (interface.annotations.len > 0 or !self.excludeZeroValues) {
             try self.writeKey("options");
-            try self.writeOptions(interface.options, false);
+            try self.writeOptions(interface.annotations, false);
         }
 
         if (interface.funcs.len > 0 or !self.excludeZeroValues) {
@@ -696,7 +696,7 @@ const Context = struct {
         }
     }
 
-    fn writeInterfaces(self: *Self, interfaces: []const ast.Interface) !void {
+    fn writeInterfaces(self: *Self, interfaces: []const ast.Protocol) !void {
         if (!self.includeInterfaces or (self.excludeZeroValues and interfaces.len == 0)) {
             return;
         }
@@ -748,11 +748,11 @@ pub const YamlMarshaller = struct {
         try ctx.writeDocumentation(doc.documentation);
         try ctx.writePact(doc.pact);
         try ctx.writeImports(doc.imports);
-        try ctx.writeOptions(doc.options, true);
+        try ctx.writeOptions(doc.annotations, true);
         try ctx.writeConstants(doc.constants);
         try ctx.writeEnums(doc.enums);
-        try ctx.writeMessages(doc.messages);
-        try ctx.writeOptionDefinitions(doc.optionDefinitions);
-        try ctx.writeInterfaces(doc.interfaces);
+        try ctx.writeMessages(doc.structs);
+        try ctx.writeOptionDefinitions(doc.annotation_definitions);
+        try ctx.writeInterfaces(doc.protocols);
     }
 };
