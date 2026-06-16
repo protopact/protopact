@@ -53,9 +53,9 @@ pub fn StackArray(T: type, comptime count: usize) type {
 /// stack buffer.
 pub fn StackFallbackArray(T: type, comptime count: usize) type {
     return struct {
-        stackBuffer: [count]T,
-        stackLen: usize,
-        heapArray: std.ArrayList(T),
+        stack_buffer: [count]T,
+        stack_len: usize,
+        heap_array: std.ArrayList(T),
         allocator: std.mem.Allocator,
 
         const Self = @This();
@@ -63,43 +63,43 @@ pub fn StackFallbackArray(T: type, comptime count: usize) type {
 
         pub fn init(ally: std.mem.Allocator) Self {
             return .{
-                .stackBuffer = undefined,
-                .stackLen = 0,
+                .stack_buffer = undefined,
+                .stack_len = 0,
                 .allocator = ally,
-                .heapArray = std.ArrayList(T).initCapacity(ally, 0) catch unreachable,
+                .heap_array = std.ArrayList(T).initCapacity(ally, 0) catch unreachable,
             };
         }
 
         pub fn append(self: *Self, item: T) std.mem.Allocator.Error!void {
             // If there is room in the stack buffer, fill it up first.
-            if (self.stackLen < count) {
-                self.stackBuffer[self.stackLen] = item;
-                self.stackLen += 1;
+            if (self.stack_len < count) {
+                self.stack_buffer[self.stack_len] = item;
+                self.stack_len += 1;
                 return;
             }
 
             // If arraylist has non-zero items, initialize it with 50 items to avoid growing again.
-            if (self.heapArray.items.len == 0)
-                try self.heapArray.ensureTotalCapacity(self.allocator, heapArrayInitialCapacity);
+            if (self.heap_array.items.len == 0)
+                try self.heap_array.ensureTotalCapacity(self.allocator, heapArrayInitialCapacity);
 
-            try self.heapArray.append(self.allocator, item);
+            try self.heap_array.append(self.allocator, item);
         }
 
         pub fn len(self: Self) usize {
-            return self.stackLen + self.heapArray.items.len;
+            return self.stack_len + self.heap_array.items.len;
         }
 
         /// allocates memory with the newAllocator and drains both the stack and any dynamically allocated items
         /// into the new memory.
         /// NOTE: The heap allocated buffer gets freed if this function returns without an error.
-        pub fn toOwnedSlice(self: *Self, newAllocator: std.mem.Allocator) std.mem.Allocator.Error![]T {
-            const newBuffer = try newAllocator.alloc(T, self.stackLen + self.heapArray.items.len);
-            @memcpy(newBuffer[0..self.stackLen], self.stackBuffer[0..self.stackLen]);
-            if (self.heapArray.items.len > 0) {
-                @memcpy(newBuffer[self.stackLen..], self.heapArray.items);
-                self.heapArray.deinit(self.allocator);
+        pub fn toOwnedSlice(self: *Self, new_allocator: std.mem.Allocator) std.mem.Allocator.Error![]T {
+            const new_buffer = try new_allocator.alloc(T, self.stack_len + self.heap_array.items.len);
+            @memcpy(new_buffer[0..self.stack_len], self.stack_buffer[0..self.stack_len]);
+            if (self.heap_array.items.len > 0) {
+                @memcpy(new_buffer[self.stack_len..], self.heap_array.items);
+                self.heap_array.deinit(self.allocator);
             }
-            return newBuffer;
+            return new_buffer;
         }
 
         pub const Iterator = struct {
@@ -110,16 +110,16 @@ pub fn StackFallbackArray(T: type, comptime count: usize) type {
                 if (self.i >= count) {
                     // heap array mode.
                     const position = self.i - count;
-                    if (position >= self.array.heapArray.items.len)
+                    if (position >= self.array.heap_array.items.len)
                         return null;
                     defer self.i += 1;
-                    return self.array.heapArray.items[position];
+                    return self.array.heap_array.items[position];
                 } else {
                     // stack array mode.
-                    if (self.i >= self.array.stackLen)
+                    if (self.i >= self.array.stack_len)
                         return null;
                     defer self.i += 1;
-                    return self.array.stackBuffer[self.i];
+                    return self.array.stack_buffer[self.i];
                 }
             }
         };
@@ -129,17 +129,17 @@ pub fn StackFallbackArray(T: type, comptime count: usize) type {
         }
 
         pub inline fn getFirstAssumeSafe(self: Self) T {
-            return self.stackBuffer[0];
+            return self.stack_buffer[0];
         }
 
         pub fn clear(self: *Self) void {
-            self.stackLen = 0;
-            self.heapArray.clearRetainingCapacity();
+            self.stack_len = 0;
+            self.heap_array.clearRetainingCapacity();
         }
 
         pub fn deinit(self: *Self) void {
-            self.stackLen = 0;
-            self.heapArray.clearAndFree(self.allocator);
+            self.stack_len = 0;
+            self.heap_array.clearAndFree(self.allocator);
         }
     };
 }
