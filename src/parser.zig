@@ -300,16 +300,16 @@ const Context = struct {
             (switch (token.kind) {
                 .Pact => self.processPact(),
                 .Import => self.processImport(),
-                .RawHash, .Hash, .PrivateHash => option: {
+                .ExtraHash, .Hash, .PrivateHash => option: {
                     // NB: Special case where we need to consume the first token itself.
                     self.it.goBack();
                     break :option self.processOption();
                 },
                 .Const => self.processConst(),
                 .Enum => self.processEnum(),
-                .Message => self.processMessage(),
+                .Struct => self.processMessage(),
                 .Option => self.processOptionDefinition(),
-                .Interface => self.processInterface(),
+                .Protocol => self.processInterface(),
                 .Comment => {}, // ignore comments.
                 .Documentation => documentation: {
                     // NB: Special case where we need to consume the first token itself.
@@ -448,7 +448,7 @@ const Context = struct {
             const token = try self.peekNextOrError();
             switch (token.kind) {
                 .Comment => self.consume(),
-                .Hash, .RawHash, .PrivateHash => if (self.parseOption(false, null)) |v| {
+                .Hash, .ExtraHash, .PrivateHash => if (self.parseOption(false, null)) |v| {
                     try options.append(v.data);
                     if (v.scopeExited) break;
                 } else |err| if (try self.recoverExitsScope(err, EnumBodyRecoveryPoints, true))
@@ -559,7 +559,7 @@ const Context = struct {
             switch (token.kind) {
                 .Comment, .Comma => self.consume(),
                 .Documentation => try self.captureDocumentationGroup(),
-                .Hash, .RawHash, .PrivateHash => if (self.parseOption(false, null)) |v| {
+                .Hash, .ExtraHash, .PrivateHash => if (self.parseOption(false, null)) |v| {
                     try options.append(v.data);
                     if (v.scopeExited) break;
                 } else |err| if (try self.recoverExitsScope(err, MessageBodyRecoveryPoints, true))
@@ -769,7 +769,7 @@ const Context = struct {
                         if (v.scopeExited) break :blk true;
                     } else |err| if (try self.recoverExitsScope(err, &.{.Comma}, true))
                         break :blk true,
-                    .Hash, .RawHash, .PrivateHash => if (self.parseOption(false, null)) |v| {
+                    .Hash, .ExtraHash, .PrivateHash => if (self.parseOption(false, null)) |v| {
                         try options.append(v.data);
                         if (v.scopeExited) break :blk true;
                     } else |err| if (try self.recoverExitsScope(err, OneOfBodyRecoveryPoints, true))
@@ -887,14 +887,14 @@ const Context = struct {
             return Error.UnexpectedEOF;
         };
         switch (targetToken.kind) {
-            .TargetPact => return ast.AnnotationTarget.Package,
+            .TargetPackage => return ast.AnnotationTarget.Package,
             .TargetOneOf => return ast.AnnotationTarget.OneOf,
             .TargetEnum => return ast.AnnotationTarget.Enum,
             .TargetConst => return ast.AnnotationTarget.Constant,
             .TargetEnumVariant => return ast.AnnotationTarget.EnumVariant,
-            .TargetMessage => return ast.AnnotationTarget.Struct,
+            .TargetStruct => return ast.AnnotationTarget.Struct,
             .TargetField => return ast.AnnotationTarget.Field,
-            .TargetInterface => return ast.AnnotationTarget.Protocol,
+            .TargetProtocol => return ast.AnnotationTarget.Protocol,
             .TargetFunc => return ast.AnnotationTarget.Func,
             else => {
                 self.addError(SyntaxError.expectToken(&targetToken, "option target"));
@@ -923,7 +923,7 @@ const Context = struct {
             const token = try self.peekNextOrError();
             switch (token.kind) {
                 .Semicolon, .Comma, .Comment => self.consume(),
-                .Hash, .PrivateHash, .RawHash => if (self.parseOption(false, null)) |v| {
+                .Hash, .PrivateHash, .ExtraHash => if (self.parseOption(false, null)) |v| {
                     try options.append(v.data);
                     if (v.scopeExited) break;
                 } else |err| if (try self.recoverExitsScope(err, InterfaceBodyRecoveryPoints, true))
@@ -1119,7 +1119,7 @@ const Context = struct {
                 }
                 return .default();
             },
-            .RawHash => {
+            .ExtraHash => {
                 self.consume();
                 return .{ .raw = true, .private = false };
             },
@@ -1492,7 +1492,7 @@ const Context = struct {
                         doc.position = nextToken.position;
                     }
 
-                    doc.lastDocLine = nextToken.position.line + nextToken.kind.Documentation.newlineCount;
+                    doc.lastDocLine = nextToken.position.line + nextToken.kind.Documentation.newline_count;
                     const content = nextToken.kind.Documentation.content;
                     doc.contentSize += content.len + 1; // NB: 1 for the new line!
                     try doc.boundaries.append(content);
@@ -1562,7 +1562,7 @@ const Context = struct {
     fn nextTokenAcceptsTopLevelDocumentation(self: *const Context, stagedDoc: StagedDocumentation) bool {
         const nextToken = self.it.peek(1) orelse return false;
         switch (nextToken.kind) {
-            .Message, .Enum, .Const, .Interface => {
+            .Struct, .Enum, .Const, .Protocol => {
                 return stagedDocumentationBelongsToLine(stagedDoc, nextToken.position.line);
             },
             else => return false,

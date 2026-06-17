@@ -1,13 +1,13 @@
 const ast = @import("ast.zig");
 const std = @import("std");
+
 const StackArray = @import("stack_array.zig").StackArray;
 const Allocator = std.mem.Allocator;
 
-const keywordTable = std.StaticStringMap(TokenKind).initComptime(.{
-    .{ "pact", .Pact },
+const keyword_table = std.StaticStringMap(TokenKind).initComptime(.{
     .{ "import", .Import },
-    .{ "message", .Message },
-    .{ "interface", .Interface },
+    .{ "struct", .Struct },
+    .{ "protocol", .Protocol },
     .{ "enum", .Enum },
     .{ "const", .Const },
     .{ "stream", .Stream },
@@ -19,12 +19,12 @@ const keywordTable = std.StaticStringMap(TokenKind).initComptime(.{
     .{ "map", .Map },
     .{ "oneof", .OneOf },
     .{ "for", .For },
-    .{ "option", .Option },
+    .{ "annotation", .Annotation },
 
-    .{ "Pact", .TargetPact },
-    .{ "Message", .TargetMessage },
+    .{ "Package", .TargetPackage },
+    .{ "Struct", .TargetStruct },
     .{ "Const", .TargetConst },
-    .{ "Interface", .TargetInterface },
+    .{ "Protocol", .TargetProtocol },
     .{ "Field", .TargetField },
     .{ "OneOf", .TargetOneOf },
     .{ "Enum", .TargetEnum },
@@ -36,7 +36,7 @@ pub const Error = struct {
     message: []const u8,
     // literal is the part of the source that is related to the error.
     literal: ?[]const u8,
-    position: ast.Position,
+    range: ast.Range,
 
     const UnexpectedEOF = "unexpected EOF";
     const UnexpectedChar = "unexpected character";
@@ -57,39 +57,42 @@ pub const TokenKind = union(enum) {
     LessThan,
     GreaterThan,
 
+    At,
     Hash,
-    RawHash,
+    ExtraHash,
     PrivateHash,
+    PrivateExtraHash,
+    ExtraMode,
+    PrivateMode,
+    PrivateExtraMode,
     Colon,
     Semicolon,
     Dot,
     QuestionMark,
 
-    Pact,
     Import,
-    Message,
-    Interface,
+    Struct,
+    Protocol,
     Enum,
     Func,
     Stream,
-    Underscore,
     Embed,
     List,
     Map,
     OneOf,
-    Option,
+    Annotation,
     For,
     Const,
 
-    TargetMessage,
-    TargetInterface,
+    TargetStruct,
+    TargetProtocol,
     TargetEnum,
     TargetEnumVariant,
     TargetConst,
     TargetOneOf,
     TargetFunc,
     TargetField,
-    TargetPact,
+    TargetPackage,
 
     Equal,
     Return,
@@ -120,9 +123,8 @@ pub const TokenKind = union(enum) {
         /// actual content of the documentation segment.
         content: []const u8,
         /// a single line comment would have a value of 0.
-        newlineCount: u16,
+        newline_count: u16,
     },
-    Comment: []const u8,
     Integer: i64,
     Float: f64,
 
@@ -132,29 +134,17 @@ pub const TokenKind = union(enum) {
 pub const Token = struct {
     kind: TokenKind,
     literal: []const u8,
-    position: ast.Position,
-
-    /// returns a range capturing the start-end for this token.
-    pub fn range(self: Token) ast.Range {
-        return ast.Range{
-            .start = self.position,
-            .endOffset = self.endOffset(),
-        };
-    }
+    range: ast.Range,
 
     /// returns a range capturing the start from the current token and the end of the other token.
     pub fn rangeUntilToken(self: Token, other: Token) ast.Range {
         return ast.Range{
-            .start = self.position,
-            .endOffset = other.endOffset(),
+            .start = self.range.start,
+            .end = other.range.end,
         };
     }
 
-    pub inline fn endOffset(self: Token) usize {
-        return self.position.offset + self.literal.len;
-    }
-
-    pub fn debug(self: Token, ally: Allocator, writer: *std.Io.Writer) !void {
+    pub fn format(self: *const Token, writer: *std.Io.Writer) !void {
         return switch (self.kind) {
             .Documentation => {
                 var content = self.kind.Documentation.content;
@@ -164,28 +154,9 @@ pub const Token = struct {
                 try writer.print("<{s}:{s}:+{d}>", .{
                     @tagName(self.kind),
                     content,
-                    self.kind.Documentation.newlineCount,
+                    self.kind.Documentation.newline_count,
                 });
             },
-            .Comment => {
-                const newlineCount = std.mem.count(u8, self.kind.Comment, "\n");
-                if (newlineCount > 0) {
-                    var content = self.kind.Comment;
-                    if (std.mem.indexOf(u8, content, "\n")) |pos| {
-                        content = content[0..pos];
-                    }
-                    try writer.print(
-                        "<{s}:{s}:+{d}>",
-                        .{ @tagName(self.kind), content, newlineCount },
-                    );
-                } else {
-                    try writer.print(
-                        "<{s}:{s}>",
-                        .{ @tagName(self.kind), self.kind.Comment },
-                    );
-                }
-            },
-
             .Identifier => try writer.print("<{s}:{s}>", .{
                 @tagName(self.kind),
                 self.literal,
@@ -198,10 +169,14 @@ pub const Token = struct {
                 @tagName(self.kind),
                 self.kind.Integer,
             }),
-            .String => try writer.print(
-                "<{s}:{s}>",
-                .{ @tagName(self.kind), try self.kind.String.toOwnedAndEscaped(ally) },
-            ),
+            .String => {
+                var buffer: [256]u8 = undefined;
+                var fba = std.heap.FixedBufferAllocator.init(&buffer);
+                try writer.print(
+                    "<{s}:{s}>",
+                    .{ @tagName(self.kind), try self.kind.String.toOwnedAndEscaped(fba.allocator()) },
+                );
+            },
             else => try writer.print("<{s}>", .{@tagName(self.kind)}),
         };
     }
@@ -217,14 +192,11 @@ pub const Iterator = struct {
     start: usize,
     /// current is the byte position of the current pointer.
     current: usize,
-    /// number of characters in the current line at the current position.
-    columnCurrent: u16,
-    /// number of characters in the current line at the start position.
-    columnStart: u16,
-    line: u16,
     tokens: TokenList,
     errors: ErrorList,
 
+    // In order to guarantee that any token returned from the next() has two tokens to the left and right of it
+    // and can be peeked, the peek buffers are used to ensure a certain amount of padding.
     const ForwardPeekBufferSize = 2;
     const BackwardPeekBufferSize = 2;
 
@@ -234,9 +206,6 @@ pub const Iterator = struct {
             .it = it,
             .start = 0,
             .current = 0,
-            .columnCurrent = 1,
-            .columnStart = 1,
-            .line = 1,
             .tokens = TokenList.init(),
             .errors = ErrorList.init(),
         };
@@ -250,9 +219,16 @@ pub const Iterator = struct {
         return self.it.bytes[self.it.i];
     }
 
+    inline fn peekAsciiTwo(self: *Iterator) ?u8 {
+        if (self.it.i+1 >= self.it.bytes.len or !std.ascii.isAscii(self.it.bytes[self.it.i+1])) {
+            return null;
+        }
+
+        return self.it.bytes[self.it.i+1];
+    }
+
     inline fn startBoundary(self: *Iterator) void {
         self.start = self.current;
-        self.columnStart = self.columnCurrent;
     }
 
     inline fn advanceAsciiOrSetUnexpectedErr(self: *Iterator) ?u8 {
@@ -287,7 +263,6 @@ pub const Iterator = struct {
 
         defer {
             self.it.i += 1;
-            self.columnCurrent += 1;
             self.current += 1;
         }
         return self.it.bytes[self.it.i];
@@ -296,7 +271,6 @@ pub const Iterator = struct {
     inline fn advanceUnicode(self: *Iterator) ?[]const u8 {
         if (self.it.nextCodepointSlice()) |char| {
             self.current += char.len;
-            self.columnCurrent += 1;
             return char;
         }
         return null;
@@ -310,19 +284,16 @@ pub const Iterator = struct {
         if (len) |size| {
             self.it.i += size;
             self.current += size;
-            self.columnCurrent += 1;
             return;
         }
 
         if (self.it.nextCodepointSlice()) |slice| {
             self.current += slice.len;
-            self.columnCurrent += 1;
         }
     }
 
     inline fn consumeAscii(self: *Iterator) void {
         self.it.i += 1;
-        self.columnCurrent += 1;
         self.current += 1;
     }
 
@@ -330,23 +301,17 @@ pub const Iterator = struct {
         return self.it.bytes[self.start..self.current];
     }
 
-    inline fn currentPosition(self: *const Iterator) ast.Position {
+    inline fn currentRange(self: *const Iterator) ast.Range {
         return .{
-            .line = self.line,
-            .column = self.columnStart,
-            .offset = self.start,
+            .start = self.start,
+            .end = self.current,
         };
-    }
-
-    inline fn markNewLine(self: *Iterator) void {
-        self.columnCurrent = 1;
-        self.line += 1;
     }
 
     inline fn addToken(self: *Iterator, kind: TokenKind) void {
         std.debug.assert(self.tokens.len < self.tokens.capacity());
         self.tokens.appendAssumeCapacity(Token{
-            .position = self.currentPosition(),
+            .range = self.currentRange(),
             .literal = self.currentLexeme(),
             .kind = kind,
         });
@@ -358,7 +323,7 @@ pub const Iterator = struct {
         }
         self.errors.appendAssumeCapacity(Error{
             .message = message,
-            .position = self.currentPosition(),
+            .range = self.currentRange(),
             .literal = "",
         });
     }
@@ -369,7 +334,7 @@ pub const Iterator = struct {
         }
         self.errors.appendAssumeCapacity(Error{
             .message = message,
-            .position = self.currentPosition(),
+            .range = self.currentRange(),
             .literal = self.currentLexeme(),
         });
     }
@@ -406,7 +371,6 @@ pub const Iterator = struct {
 
     pub fn next(self: *Iterator) ?Token {
         if (self.i + ForwardPeekBufferSize >= self.tokens.len) {
-            @branchHint(.unlikely);
             // NB: Either reached the end of the buffer and needs refilling or has reached end of file.
             if (self.tokens.len == 0 or self.tokens.getLastAssumeSafe().kind != .EOF)
                 self.fillTokenBuffer()
@@ -430,6 +394,60 @@ pub const Iterator = struct {
         return self.tokens.buffer[self.i - 1];
     }
 
+    inline fn readAnnotationHeader(self: *Iterator, char: u8) bool {
+        switch (char) {
+            'p' => {
+                switch (self.peekAscii() orelse return false) {
+                    '#' => {
+                        self.consumeAscii(); // consume the #
+                        self.addToken(.PrivateHash);
+                        return true;
+                    },
+                    '[' => {
+                        self.consumeAscii(); // consume the [
+                        self.addToken(.PrivateMode);
+                        return true;
+                    },
+                    'x' => {
+                        switch (self.peekAsciiTwo() orelse return false) {
+                            '#' => {
+                                self.consumeAscii(); // consume x
+                                self.consumeAscii(); // consume #
+                                self.addToken(.PrivateExtraHash);
+                                return true;
+                            },
+                            '[' => {
+                                self.consumeAscii(); // consume x
+                                self.consumeAscii(); // consume [
+                                self.addToken(.PrivateExtraMode);
+                                return true;
+                            },
+                            else => {},
+                        }
+                    },
+                    else => {},
+                }
+            },
+            'x' => {
+                switch (self.peekAscii() orelse return false) {
+                    '#' => {
+                        self.consumeAscii(); // consume #
+                        self.addToken(.ExtraHash);
+                        return true;
+                    },
+                    '[' => {
+                        self.consumeAscii(); // consume [
+                        self.addToken(.ExtraMode);
+                        return true;
+                    },
+                    else => {},
+                }
+            },
+            else => {},
+        }
+        return false;
+    }
+
     /// fills the token buffer leaving 2 items in history to allow going backwards.
     fn fillTokenBuffer(self: *Iterator) void {
         const PeekBufferSize = ForwardPeekBufferSize + BackwardPeekBufferSize;
@@ -451,19 +469,9 @@ pub const Iterator = struct {
                 self.addErrorForCurrentLexeme(Error.UnexpectedChar);
                 continue;
             } orelse return self.addToken(.EOF);
-            switch (char) {
-                'r', 'p' => {
-                    switch (self.peekAscii() orelse break) {
-                        '#' => {
-                            self.consumeAscii(); // consume the #
-                            self.addToken(if (char == 'r') .RawHash else .PrivateHash);
-                            continue;
-                        },
-                        else => {},
-                    }
-                },
-                else => {},
-            }
+
+            if (self.readAnnotationHeader(char)) 
+                continue;
 
             switch (char) {
                 // Main character matching
@@ -482,12 +490,13 @@ pub const Iterator = struct {
                 ':' => self.addToken(.Colon),
                 '=' => self.addToken(.Equal),
                 '#' => self.addToken(.Hash),
+                '@' => self.addToken(.At),
                 '/' => self.scanComment(),
                 '-' => {
-                    const nextChar = self.advanceAsciiOrSetUnexpectedErr() orelse continue;
-                    if (nextChar == '>') {
+                    const next_char = self.advanceAsciiOrSetUnexpectedErr() orelse continue;
+                    if (next_char == '>') {
                         self.addToken(.Return);
-                    } else if (std.ascii.isDigit(nextChar)) {
+                    } else if (std.ascii.isDigit(next_char)) {
                         self.scanNumber();
                     } else {
                         self.start += 1; // NB: to generate the error for the last character.
@@ -495,9 +504,7 @@ pub const Iterator = struct {
                         continue;
                     }
                 },
-                '_' => self.addToken(.Underscore),
-                ' ', '\t', '\r' => {},
-                '\n' => self.markNewLine(),
+                ' ', '\t', '\r', '\n' => {},
                 '`' => self.scanIdentifierLiteral(),
                 '\'' => self.scanString('\''),
                 '"' => self.scanString('"'),
@@ -518,7 +525,6 @@ pub const Iterator = struct {
         while (self.it.i < self.it.bytes.len) {
             if (self.it.bytes[self.it.i] == '\n') {
                 self.consumeAscii();
-                self.markNewLine();
                 return;
             }
             self.it.i += 1;
@@ -549,7 +555,6 @@ pub const Iterator = struct {
                         },
                     });
                     self.current += 1;
-                    self.markNewLine();
                     return;
                 },
                 '\\' => {
@@ -581,12 +586,12 @@ pub const Iterator = struct {
         const char = self.advanceAsciiOrSetUnexpectedErr() orelse return;
         switch (char) {
             '/' => {
-                var slashCount: u8 = 2;
+                var slash_count: u8 = 2;
                 while (true) {
-                    const nextChar = self.peekAscii() orelse break;
-                    if (nextChar == '/') {
+                    const next_char = self.peekAscii() orelse break;
+                    if (next_char == '/') {
                         self.consumeAscii();
-                        slashCount += 1;
+                        slash_count += 1;
                     } else {
                         break;
                     }
@@ -594,50 +599,44 @@ pub const Iterator = struct {
                 const start = self.current;
                 // NB: consume all characters until the end of the line.
                 while (true) {
-                    const nextChar = self.it.peek(1);
-                    if ((nextChar.len == 1 and nextChar[0] == '\n') or nextChar.len == 0) {
+                    const next_char = self.it.peek(1);
+                    if ((next_char.len == 1 and next_char[0] == '\n') or next_char.len == 0) {
                         break;
                     }
-                    self.consumeUnicode(nextChar.len);
+                    self.consumeUnicode(next_char.len);
                 }
-                if (slashCount == 3) {
+                if (slash_count == 3) {
                     self.addToken(.{ .Documentation = .{
                         .content = self.it.bytes[start..self.current],
-                        .newlineCount = 0,
+                        .newline_count = 0,
                     } });
-                } else {
-                    self.addToken(.{ .Comment = self.it.bytes[start..self.current] });
                 }
             },
             '*' => {
-                var starCount: u8 = 1;
+                var star_count: u8 = 1;
                 while (true) {
-                    const nextChar = self.peekAscii() orelse break;
-                    if (nextChar == '*') {
-                        starCount += 1;
+                    const next_char = self.peekAscii() orelse break;
+                    if (next_char == '*') {
+                        star_count += 1;
                         self.consumeAscii();
-                    } else {
-                        break;
-                    }
+                    } else break;
                 }
                 const start = self.current;
-                const startPosition = self.currentPosition();
                 var end: usize = undefined;
-                var newlineCount: u16 = 0;
+                var newline_count: u16 = 0;
                 while (true) {
                     // NB: consume all characters until */ is discovered.
-                    const nextChar = self.advanceUnicode() orelse {
+                    const next_char = self.advanceUnicode() orelse {
                         self.addErrorForCurrentLexeme(Error.UnterminatedMultiLineComment);
                         return;
                     };
-                    if (nextChar.len == 1) switch (nextChar[0]) {
+                    if (next_char.len == 1) switch (next_char[0]) {
                         '\n' => { // NB: Count the new lines!
-                            self.markNewLine();
-                            newlineCount += 1;
+                            newline_count += 1;
                         },
                         '*' => { // NB: If "*" is followed by ascii char "/" then break out!
-                            if (self.peekAscii()) |nextAscii| {
-                                if (nextAscii == '/') {
+                            if (self.peekAscii()) |next_ascii| {
+                                if (next_ascii == '/') {
                                     end = self.current - 1;
                                     self.consumeAscii();
                                     break;
@@ -647,24 +646,16 @@ pub const Iterator = struct {
                         else => {},
                     };
                 }
-                if (starCount == 2) {
+                if (star_count == 2) {
                     // NB: since we need to use the startPosition, we can't use addToken().
                     self.tokens.appendAssumeCapacity(.{
                         .kind = .{
                             .Documentation = .{
                                 .content = self.it.bytes[start..end],
-                                .newlineCount = newlineCount,
+                                .newline_count = newline_count,
                             },
                         },
-                        .position = startPosition,
-                        .literal = self.currentLexeme(),
-                    });
-                } else {
-                    self.tokens.appendAssumeCapacity(.{
-                        .kind = .{
-                            .Comment = self.it.bytes[start..end],
-                        },
-                        .position = startPosition,
+                        .range = self.currentRange(),
                         .literal = self.currentLexeme(),
                     });
                 }
@@ -674,31 +665,31 @@ pub const Iterator = struct {
     }
 
     fn scanNumber(self: *Iterator) void {
-        var nextChar = self.peekAscii();
+        var next_char = self.peekAscii();
         if (self.it.bytes[self.start] != '-') {
-            if (nextChar != null and nextChar == '-') {
+            if (next_char != null and next_char == '-') {
                 self.consumeAscii();
             }
         }
 
         while (true) {
-            nextChar = self.peekAscii() orelse break;
-            if (std.ascii.isDigit(nextChar.?)) {
+            next_char = self.peekAscii() orelse break;
+            if (std.ascii.isDigit(next_char.?)) {
                 self.consumeAscii();
             } else {
                 break;
             }
         }
 
-        var isFloat = false;
-        const nextChars = self.it.peek(2);
-        if (nextChars.len == 2 and nextChars[0] == '.' and std.ascii.isDigit(nextChars[1])) {
-            isFloat = true;
+        var is_float = false;
+        const next_chars = self.it.peek(2);
+        if (next_chars.len == 2 and next_chars[0] == '.' and std.ascii.isDigit(next_chars[1])) {
+            is_float = true;
             self.consumeAscii();
             self.consumeAscii();
             while (true) {
-                nextChar = self.peekAscii() orelse break;
-                if (std.ascii.isDigit(nextChar.?)) {
+                next_char = self.peekAscii() orelse break;
+                if (std.ascii.isDigit(next_char.?)) {
                     self.consumeAscii();
                 } else {
                     break;
@@ -706,7 +697,7 @@ pub const Iterator = struct {
             }
         }
 
-        if (isFloat) {
+        if (is_float) {
             const number = std.fmt.parseFloat(f64, self.currentLexeme()) catch {
                 self.addToken(.{ .Float = 0 });
                 return self.addErrorForCurrentLexeme(Error.InvalidFloatNumber);
@@ -723,15 +714,15 @@ pub const Iterator = struct {
 
     fn scanIdentifier(self: *Iterator) void {
         while (true) {
-            const nextChar = self.peekAscii() orelse break;
-            if (std.ascii.isAlphanumeric(nextChar) or nextChar == '_') {
+            const next_char = self.peekAscii() orelse break;
+            if (std.ascii.isAlphanumeric(next_char) or next_char == '_') {
                 self.consumeAscii();
             } else {
                 break;
             }
         }
 
-        if (keywordTable.get(self.currentLexeme())) |kind| {
+        if (keyword_table.get(self.currentLexeme())) |kind| {
             self.addToken(kind);
         } else {
             self.addToken(.Identifier);
@@ -742,8 +733,8 @@ pub const Iterator = struct {
     /// alphanumeric characters until next backtick.
     fn scanIdentifierLiteral(self: *Iterator) void {
         while (true) {
-            const nextChar = self.it.peek(1);
-            if (nextChar.len == 1 and (std.ascii.isAlphanumeric(nextChar[0]) or nextChar[0] == '_')) {
+            const next_char = self.it.peek(1);
+            if (next_char.len == 1 and (std.ascii.isAlphanumeric(next_char[0]) or next_char[0] == '_')) {
                 self.consumeAscii();
             } else {
                 break;
@@ -751,8 +742,8 @@ pub const Iterator = struct {
         }
 
         self.start += 1; // skip the backtick.
-        const nextChar = self.it.peek(1);
-        if (nextChar.len != 1 or nextChar[0] != '`') {
+        const next_char = self.it.peek(1);
+        if (next_char.len != 1 or next_char[0] != '`') {
             return self.addError(Error.UnterminatedIdentifierLiteral);
         }
         self.addToken(.Identifier);
@@ -774,13 +765,9 @@ pub const Result = struct {
     }
 
     /// debug returns a string representation for the Result.
-    pub fn debug(
-        self: *const Result,
-        ally: Allocator,
-        writer: *std.Io.Writer,
-    ) error{ OutOfMemory, WriteFailed }!void {
+    pub fn format(self: *const Result, writer: *std.Io.Writer) error{ OutOfMemory, WriteFailed }!void {
         for (self.tokens) |item| {
-            try item.debug(ally, writer);
+            try item.format(writer);
         }
     }
 };

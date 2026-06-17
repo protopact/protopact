@@ -10,23 +10,18 @@ test "tokenize" {
         literal: []const u8,
     };
 
-    const NoError = &[_]ErrorExpectation{};
+    const NoError: []const ErrorExpectation = &.{};
 
     const TestCase = struct {
         source: []const u8,
         expectation: []const u8,
         errors: []const ErrorExpectation,
     };
-    const tests = &[_]TestCase{
+    const tests: []const TestCase = &.{
         // Identifier and Simple Statements
         .{
             .source = "name = 1.23",
             .expectation = "<Identifier:name><Equal><Float:1.23><EOF>",
-            .errors = NoError,
-        },
-        .{
-            .source = "pact meshapi.gateway.v1alpha1",
-            .expectation = "<Pact><Identifier:meshapi><Dot><Identifier:gateway><Dot><Identifier:v1alpha1><EOF>",
             .errors = NoError,
         },
         .{
@@ -38,7 +33,7 @@ test "tokenize" {
         // Comments and Documentation
         .{
             .source = "// this is a comment",
-            .expectation = "<Comment: this is a comment><EOF>",
+            .expectation = "<EOF>",
             .errors = NoError,
         },
         .{
@@ -48,7 +43,7 @@ test "tokenize" {
         },
         .{
             .source = "////! this is a comment",
-            .expectation = "<Comment:! this is a comment><EOF>",
+            .expectation = "<EOF>",
             .errors = NoError,
         },
         .{
@@ -62,7 +57,7 @@ test "tokenize" {
             .source =
             \\/* single line comment*/
             ,
-            .expectation = "<Comment: single line comment><EOF>",
+            .expectation = "<EOF>",
             .errors = NoError,
         },
         .{
@@ -82,7 +77,7 @@ test "tokenize" {
             \\ * and here is a line that starts with a star.
             \\ ***/
             ,
-            .expectation = "<Comment: this is a multi-line comment:+3><EOF>",
+            .expectation = "<EOF>",
             .errors = NoError,
         },
 
@@ -120,12 +115,12 @@ test "tokenize" {
         .{
             .source = "--102391",
             .expectation = "<Integer:102391><EOF>",
-            .errors = &[_]ErrorExpectation{.{ .literal = "-", .message = "unexpected character" }},
+            .errors = &.{ .{ .literal = "-", .message = "unexpected character" } },
         },
         .{
             .source = "9999999999999999999999999999",
             .expectation = "<Integer:0><EOF>",
-            .errors = &[_]ErrorExpectation{.{
+            .errors = &.{.{
                 .literal = "9999999999999999999999999999",
                 .message = "invalid integer number",
             }},
@@ -150,7 +145,7 @@ test "tokenize" {
         .{
             .source = "name = 'some string",
             .expectation = "<Identifier:name><Equal><String:some string><EOF>",
-            .errors = &[_]ErrorExpectation{.{ .literal = "'some string", .message = "unterminated string" }},
+            .errors = &.{.{ .literal = "'some string", .message = "unterminated string" }},
         },
         .{
             .source =
@@ -158,7 +153,7 @@ test "tokenize" {
             \\12
             ,
             .expectation = "<String:unterminated string><Integer:12><EOF>",
-            .errors = &[_]ErrorExpectation{.{ .literal = "\"unterminated string", .message = "unterminated string" }},
+            .errors = &.{.{ .literal = "\"unterminated string", .message = "unterminated string" }},
         },
 
         // Unicode
@@ -169,7 +164,7 @@ test "tokenize" {
         },
         .{
             .source = "// this is a comment with unicode ∑⦿",
-            .expectation = "<Comment: this is a comment with unicode ∑⦿><EOF>",
+            .expectation = "<EOF>",
             .errors = NoError,
         },
         .{
@@ -179,7 +174,7 @@ test "tokenize" {
             \\ #required
             ,
             .expectation = "<EOF>",
-            .errors = &[_]ErrorExpectation{.{
+            .errors = &.{.{
                 .literal =
                 \\/* some comment
                 \\ * line
@@ -190,42 +185,79 @@ test "tokenize" {
         },
         .{
             .source =
-            \\ /* unicode ∑*⦿ */
+            \\ /** unicode ∑*⦿ */
             ,
-            .expectation = "<Comment: unicode ∑*⦿ ><EOF>",
+            .expectation = "<Documentation: unicode ∑*⦿ :+0><EOF>",
             .errors = NoError,
         },
         .{
             .source = "name∑ = 1",
             .expectation = "<Identifier:name><Equal><Integer:1><EOF>",
-            .errors = &[_]ErrorExpectation{.{ .literal = "∑", .message = "unexpected character" }},
+            .errors = &.{.{ .literal = "∑", .message = "unexpected character" }},
         },
         .{
             .source = "1.∑3",
             .expectation = "<Integer:1><Dot><Integer:3><EOF>",
-            .errors = &[_]ErrorExpectation{.{ .literal = "∑", .message = "unexpected character" }},
+            .errors = &.{.{ .literal = "∑", .message = "unexpected character" }},
         },
         .{
             .source = "-∑",
             .expectation = "<EOF>",
-            .errors = &[_]ErrorExpectation{.{ .literal = "∑", .message = "unexpected character" }},
+            .errors = &.{.{ .literal = "∑", .message = "unexpected character" }},
         },
         .{
             .source = "#required",
             .expectation = "<Hash><Identifier:required><EOF>",
             .errors = NoError,
         },
+        .{
+            .source = "p#required",
+            .expectation = "<PrivateHash><Identifier:required><EOF>",
+            .errors = NoError,
+        },
+        .{
+            .source = "px#required",
+            .expectation = "<PrivateExtraHash><Identifier:required><EOF>",
+            .errors = NoError,
+        },
+        .{
+            .source = "xp#required",
+            .expectation = "<Identifier:xp><Hash><Identifier:required><EOF>",
+            .errors = NoError,
+        },
+        .{
+            .source = "p[mode1,mode2]#required",
+            .expectation = "<PrivateMode><Identifier:mode1><Comma><Identifier:mode2><RightBracket><Hash><Identifier:required><EOF>",
+            .errors = NoError,
+        },
+        .{
+            .source = "px[mode1]#required",
+            .expectation = "<PrivateExtraMode><Identifier:mode1><RightBracket><Hash><Identifier:required><EOF>",
+            .errors = NoError,
+        },
+        .{
+            .source = "const a = { @ref(some.field) = @ref(`Enum`) }",
+            .expectation = "<Const><Identifier:a><Equal><LeftCurlyBrace><At><Identifier:ref><LeftParan>" ++ 
+                "<Identifier:some><Dot><Identifier:field><RightParan><Equal><At><Identifier:ref><LeftParan>" ++ 
+                "<Identifier:Enum><RightParan><RightCurlyBrace><EOF>",
+            .errors = NoError,
+        },
+        .{
+            .source = "annotation for Package, Struct",
+            .expectation = "<Annotation><For><TargetPackage><Comma><TargetStruct><EOF>",
+            .errors = NoError,
+        },
 
-        // Bad Pact
+        // Incomplete keypath
         .{
             .source =
-            \\pact meshapi.gateway.
+            \\#meshapi.gateway.
             \\
-            \\message User {
+            \\struct User {
             \\}
             ,
-            .expectation = "<Pact><Identifier:meshapi><Dot><Identifier:gateway><Dot>" ++
-                "<Message><Identifier:User><LeftCurlyBrace><RightCurlyBrace><EOF>",
+            .expectation = "<Hash><Identifier:meshapi><Dot><Identifier:gateway><Dot>" ++
+                "<Struct><Identifier:User><LeftCurlyBrace><RightCurlyBrace><EOF>",
             .errors = NoError,
         },
 
@@ -233,11 +265,11 @@ test "tokenize" {
         .{
             .source =
             \\import "some/package
-            \\pact mesh∑.api.v1
+            \\#mesh∑.api.v1
             \\import 'some/package"
             \\#max = 111111111111111111111111111111 #required
             ,
-            .expectation = "<Import><String:some/package><Pact><Identifier:mesh><Dot>" ++
+            .expectation = "<Import><String:some/package><Hash><Identifier:mesh><Dot>" ++
                 "<Identifier:api><Dot><Identifier:v1><Import><String:some/package\"><Hash>" ++
                 "<Identifier:max><Equal><Integer:0><Hash><Identifier:required><EOF>",
             .errors = &[_]ErrorExpectation{
@@ -276,7 +308,7 @@ test "tokenize" {
 
         var testAllocator = std.heap.ArenaAllocator.init(std.testing.allocator);
         defer testAllocator.deinit();
-        try result.debug(testAllocator.allocator(), &writer);
+        try result.format(&writer);
 
         try std.testing.expectEqualStrings(
             tt.expectation,
@@ -292,11 +324,12 @@ fn expectNoScanError(errors: []const tokenizer.Error) !void {
 
     for (errors, 0..) |unexpectedErr, index| {
         std.debug.print(
-            "Unexpected error[#{d}]:\n Message: {s}\n Position: {any}\n Literal: '{s}'\n",
+            "Unexpected error[#{d}]:\n Message: {s}\n Range: {}-{}\n Literal: '{s}'\n",
             .{
                 index + 1,
                 unexpectedErr.message,
-                unexpectedErr.position,
+                unexpectedErr.range.start,
+                unexpectedErr.range.end,
                 unexpectedErr.literal orelse "n/a",
             },
         );
@@ -304,59 +337,60 @@ fn expectNoScanError(errors: []const tokenizer.Error) !void {
     return error.UnexpectedError;
 }
 
-fn formatTokenWithPosition(ally: std.mem.Allocator, writer: *std.Io.Writer, tokens: []const tokenizer.Token) !void {
-    var lineBuffer: [512]u8 = undefined;
+fn formatTokenWithPosition(writer: *std.Io.Writer, tokens: []const tokenizer.Token) !void {
+    var line_buffer: [512]u8 = undefined;
     for (tokens) |item| {
-        var lineWriter = std.Io.Writer.fixed(&lineBuffer);
-        try item.debug(ally, &lineWriter);
-        var lineContent = lineWriter.buffered();
-        try writer.print("{s}|{d},{d}>", .{
-            lineContent[0 .. lineContent.len - 1],
-            item.position.line,
-            item.position.column,
+        var line_writer = std.Io.Writer.fixed(&line_buffer);
+        try item.format(&line_writer);
+        var line_content = line_writer.buffered();
+        try writer.print("{s}|{d}-{d}>", .{
+            line_content[0 .. line_content.len - 1],
+            item.range.start,
+            item.range.end,
         });
     }
 }
 
-test "positions" {
+test "range" {
     const allocator = std.testing.allocator;
 
     const TestCase = struct {
         source: []const u8,
         expectation: []const u8,
     };
-    const tests = &[_]TestCase{
+    const tests: []const TestCase = &.{
         .{
-            .source = "name = 'pactum'",
-            .expectation = "<Identifier:name|1,1><Equal|1,6><String:pactum|1,8><EOF|1,16>",
+            .source = "name = 'pragma'",
+            .expectation = "<Identifier:name|0-4><Equal|5-6><String:pragma|7-15><EOF|15-15>",
         },
         .{
             .source =
-            \\pact some.package
+            \\#some.package
             \\/** some single-line documentation */
             ,
-            .expectation = "<Pact|1,1><Identifier:some|1,6><Dot|1,10><Identifier:package|1,11>" ++
-                "<Documentation: some single-line documentation :+0|2,1><EOF|2,38>",
+            .expectation = "<Hash|0-1><Identifier:some|1-5><Dot|5-6><Identifier:package|6-13>" ++
+                "<Documentation: some single-line documentation :+0|14-51><EOF|51-51>",
         },
         .{
             .source =
-            \\pact some.package
+            \\px[internal]#github.org = "something"
             \\/** some multi-line documentation
             \\  * another line
             \\  */
             ,
-            .expectation = "<Pact|1,1><Identifier:some|1,6><Dot|1,10><Identifier:package|1,11>" ++
-                "<Documentation: some multi-line documentation:+2|2,1><EOF|4,5>",
+            .expectation = "<PrivateExtraMode|0-3><Identifier:internal|3-11><RightBracket|11-12>" ++
+                "<Hash|12-13><Identifier:github|13-19><Dot|19-20><Identifier:org|20-23><Equal|24-25>" ++
+                "<String:something|26-37><Documentation: some multi-line documentation:+2|38-93><EOF|93-93>",
         },
         .{
             .source = "name = 'I love Unicode ⬣ !' 1.24",
-            .expectation = "<Identifier:name|1,1><Equal|1,6><String:I love Unicode ⬣ !|1,8>" ++
-                "<Float:1.24|1,29><EOF|1,33>",
+            .expectation = "<Identifier:name|0-4><Equal|5-6><String:I love Unicode ⬣ !|7-29>" ++
+                "<Float:1.24|30-34><EOF|34-34>",
         },
         .{
             .source = "name = 'a ⬣ b' /* comment ⬣ */ x = 1",
-            .expectation = "<Identifier:name|1,1><Equal|1,6><String:a ⬣ b|1,8>" ++
-                "<Comment: comment ⬣ |1,16><Identifier:x|1,32><Equal|1,34><Integer:1|1,36><EOF|1,37>",
+            .expectation = "<Identifier:name|0-4><Equal|5-6><String:a ⬣ b|7-16><Identifier:x|35-36><Equal|37-38>" ++
+                "<Integer:1|39-40><EOF|40-40>",
         },
     };
 
@@ -371,7 +405,7 @@ test "positions" {
         var result = try tokenizer.tokenizeAlloc(allocator, tt.source);
         defer result.deinit();
         try expectNoScanError(result.errors);
-        try formatTokenWithPosition(testAllocator.allocator(), &writer, result.tokens);
+        try formatTokenWithPosition(&writer, result.tokens);
         try std.testing.expectEqualStrings(
             tt.expectation,
             writer.buffered(),
