@@ -38,7 +38,7 @@ test "tokenize" {
         },
         .{
             .source = "/// this is a documentation",
-            .expectation = "<Documentation: this is a documentation:+0><EOF>",
+            .expectation = "<Documentation:this is a documentation><EOF>",
             .errors = NoError,
         },
         .{
@@ -48,9 +48,10 @@ test "tokenize" {
         },
         .{
             .source =
-            \\/** single line documentation*/
+            \\/** single line comment with two stars*/
+            \\//! Package Documentation
             ,
-            .expectation = "<Documentation: single line documentation:+0><EOF>",
+            .expectation = "<Documentation:Package Documentation:package><EOF>",
             .errors = NoError,
         },
         .{
@@ -58,16 +59,6 @@ test "tokenize" {
             \\/* single line comment*/
             ,
             .expectation = "<EOF>",
-            .errors = NoError,
-        },
-        .{
-            .source =
-            \\/** this is a multi-line documentation
-            \\    here is another line with * but no /
-            \\ *  and here is a line that starts with a star.
-            \\ */
-            ,
-            .expectation = "<Documentation: this is a multi-line documentation:+3><EOF>",
             .errors = NoError,
         },
         .{
@@ -185,9 +176,9 @@ test "tokenize" {
         },
         .{
             .source =
-            \\ /** unicode ∑*⦿ */
+            \\ /// unicode ∑*⦿ 
             ,
-            .expectation = "<Documentation: unicode ∑*⦿ :+0><EOF>",
+            .expectation = "<Documentation:unicode ∑*⦿ ><EOF>",
             .errors = NoError,
         },
         .{
@@ -366,21 +357,21 @@ test "range" {
         .{
             .source =
             \\#some.package
-            \\/** some single-line documentation */
+            \\/// some single-line documentation
             ,
             .expectation = "<Hash|0-1><Identifier:some|1-5><Dot|5-6><Identifier:package|6-13>" ++
-                "<Documentation: some single-line documentation :+0|14-51><EOF|51-51>",
+                "<Documentation:some single-line documentation|14-48><EOF|48-48>",
         },
         .{
             .source =
             \\px[internal]#github.org = "something"
-            \\/** some multi-line documentation
-            \\  * another line
-            \\  */
+            \\/// trim leading space
+            \\///some documentation
             ,
             .expectation = "<PrivateExtraMode|0-3><Identifier:internal|3-11><RightBracket|11-12>" ++
                 "<Hash|12-13><Identifier:github|13-19><Dot|19-20><Identifier:org|20-23><Equal|24-25>" ++
-                "<String:something|26-37><Documentation: some multi-line documentation:+2|38-93><EOF|93-93>",
+                "<String:something|26-37><Documentation:trim leading space|38-60>" ++
+                "<Documentation:some documentation|61-82><EOF|82-82>",
         },
         .{
             .source = "name = 'I love Unicode ⬣ !' 1.24",

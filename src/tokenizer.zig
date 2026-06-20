@@ -120,10 +120,13 @@ pub const TokenKind = union(enum) {
         }
     },
     Documentation: struct {
+        const Flags = packed struct {
+            package: bool = false,
+        };
+
         /// actual content of the documentation segment.
         content: []const u8,
-        /// a single line comment would have a value of 0.
-        newline_count: u16,
+        flags: Flags = .{},
     },
     Integer: i64,
     Float: f64,
@@ -151,11 +154,17 @@ pub const Token = struct {
                 if (std.mem.indexOf(u8, content, "\n")) |pos| {
                     content = content[0..pos];
                 }
-                try writer.print("<{s}:{s}:+{d}>", .{
-                    @tagName(self.kind),
-                    content,
-                    self.kind.Documentation.newline_count,
-                });
+                if (self.kind.Documentation.flags.package) {
+                    try writer.print("<{s}:{s}:package>", .{
+                        @tagName(self.kind),
+                        content,
+                    });
+                } else {
+                    try writer.print("<{s}:{s}>", .{
+                        @tagName(self.kind),
+                        content,
+                    });
+                }
             },
             .Identifier => try writer.print("<{s}:{s}>", .{
                 @tagName(self.kind),
@@ -217,6 +226,16 @@ pub const Iterator = struct {
         }
 
         return self.it.bytes[self.it.i];
+    }
+
+    inline fn consumeAsciiIfEqual(self: *Iterator, char: u8) bool {
+        if (self.peekAscii()) |next_char| {
+            if (next_char == char) {
+                self.consumeAscii();
+                return true;
+            }
+        }
+        return false;
     }
 
     inline fn peekAsciiTwo(self: *Iterator) ?u8 {
@@ -596,68 +615,41 @@ pub const Iterator = struct {
                         break;
                     }
                 }
+                const package: bool = if (slash_count == 2) self.consumeAsciiIfEqual('!') else false;
+                _ = self.consumeAsciiIfEqual(' ');  // consume the first space if any.
                 const start = self.current;
                 // NB: consume all characters until the end of the line.
                 while (true) {
                     const next_char = self.it.peek(1);
-                    if ((next_char.len == 1 and next_char[0] == '\n') or next_char.len == 0) {
+                    if (next_char.len == 0 or next_char[0] == '\n') {
                         break;
                     }
                     self.consumeUnicode(next_char.len);
                 }
-                if (slash_count == 3) {
-                    self.addToken(.{ .Documentation = .{
-                        .content = self.it.bytes[start..self.current],
-                        .newline_count = 0,
-                    } });
+                if (slash_count == 3 or (slash_count == 2 and package)) {
+                    self.addToken(.{
+                        .Documentation = .{
+                            .content = self.it.bytes[start..self.current],
+                            .flags = .{ .package = package },
+                        },
+                    });
                 }
             },
             '*' => {
-                var star_count: u8 = 1;
-                while (true) {
-                    const next_char = self.peekAscii() orelse break;
-                    if (next_char == '*') {
-                        star_count += 1;
-                        self.consumeAscii();
-                    } else break;
-                }
-                const start = self.current;
-                var end: usize = undefined;
-                var newline_count: u16 = 0;
                 while (true) {
                     // NB: consume all characters until */ is discovered.
                     const next_char = self.advanceUnicode() orelse {
                         self.addErrorForCurrentLexeme(Error.UnterminatedMultiLineComment);
                         return;
                     };
-                    if (next_char.len == 1) switch (next_char[0]) {
-                        '\n' => { // NB: Count the new lines!
-                            newline_count += 1;
-                        },
-                        '*' => { // NB: If "*" is followed by ascii char "/" then break out!
-                            if (self.peekAscii()) |next_ascii| {
-                                if (next_ascii == '/') {
-                                    end = self.current - 1;
-                                    self.consumeAscii();
-                                    break;
-                                }
+                    if (next_char[0] == '*') {
+                        if (self.peekAscii()) |next_ascii| {
+                            if (next_ascii == '/') {
+                                self.consumeAscii();
+                                break;
                             }
-                        },
-                        else => {},
-                    };
-                }
-                if (star_count == 2) {
-                    // NB: since we need to use the startPosition, we can't use addToken().
-                    self.tokens.appendAssumeCapacity(.{
-                        .kind = .{
-                            .Documentation = .{
-                                .content = self.it.bytes[start..end],
-                                .newline_count = newline_count,
-                            },
-                        },
-                        .range = self.currentRange(),
-                        .literal = self.currentLexeme(),
-                    });
+                        }
+                    }
                 }
             },
             else => self.addErrorForCurrentLexeme(Error.UnexpectedChar),
