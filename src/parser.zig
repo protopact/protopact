@@ -9,146 +9,133 @@ const Allocator = std.mem.Allocator;
 
 const Error = error{ UnexpectedToken, UnexpectedEOF, NestingDepthReached } || Allocator.Error;
 
-const OptionModifiers = struct {
-    raw: bool,
-    private: bool,
+const AnnotationModifiers = struct {
+    extra: bool = false,
+    private: bool = false,
+    profiles: []const ast.Identifier = &.{},
 
-    fn default() OptionModifiers {
-        return .{ .raw = false, .private = false };
-    }
+    const default: AnnotationModifiers = .{};
 };
 
-/// Holds boundary for documentations along with the total content size so that
-/// it can be allocated all at once.
-///
-/// Staged documentation holds total content size, lastDocLine and the position of the documentation
-/// which are considered meta data and can be used to hold multiple instances of a staged documentation.
-///
-/// The storage for the actual content of the documentation is a pointer reference to a shared storage to
-/// reuse the same storage and heap allocated array and avoid unnecessary allocations since there can only
-/// be one staged documentation at a time.
+/// Accumulated and staged set of documentation lines.
 const StagedDocumentation = struct {
-    const Store = StackFallbackArray([]const u8, 10);
+    const Store = StackFallbackArray([]const u8, 32);
 
-    /// documentation content boundaries, each slice represents a line documentation/multi-line documentation segment.
-    boundaries: *Store,
-    contentSize: usize,
-    lastDocLine: u16,
-    position: ast.Position,
+    /// documentation content boundaries, each slice represents one line of documentation.
+    boundaries: Store,
+    content_size: usize,
+    start: usize,
+    encountered_package_error: bool = false,
 
-    fn init(storage: *Store) StagedDocumentation {
+    fn init(allocator: std.mem.Allocator) StagedDocumentation {
         return .{
-            .boundaries = storage,
-            .contentSize = 0,
-            .lastDocLine = 0,
-            .position = .empty(),
+            .boundaries = .init(allocator),
+            .content_size = 0,
+            .start = 0,
         };
     }
+
+    fn empty(self: *const StagedDocumentation) bool {
+        return self.boundaries.len() == 0;
+    }
+
+    fn reset(self: *StagedDocumentation) void {
+        self.boundaries.clear();
+        self.content_size = 0;
+    }
 };
 
-pub const SyntaxError = struct {
+pub const PragmaError = struct {
     pub const Location = union(enum) {
-        Position: ast.Position,
-        Range: ast.Range,
+        position: usize,
+        range: ast.Range,
     };
 
     message: []const u8,
-    literal: ?[]const u8,
     location: ?Location,
 
-    fn nestingDepthReached(position: ast.Position) SyntaxError {
+    fn nestingDepthReached(position: usize) PragmaError {
         return .{
             .message = "maximum nesting level of 10 reached",
-            .literal = "",
-            .location = Location{ .Position = position },
+            .location = Location{ .position = position },
         };
     }
 
-    fn unexpectedToken(token: *const tokenizer.Token) SyntaxError {
+    fn unexpectedToken(token: *const tokenizer.Token) PragmaError {
         if (token.kind == .EOF) {
             return .unexpectedEOF();
         }
 
         return .{
             .message = "unexpected token",
-            .literal = token.literal,
-            .location = Location{ .Range = token.range() },
+            .location = Location{ .range = token.range },
         };
     }
 
-    fn redundantOptionHash(position: ast.Position) SyntaxError {
+    fn redundantAnnotationHash(position: usize) PragmaError {
         return .{
-            .message = "redundant use of option symbol # in option block",
-            .literal = "#",
-            .location = Location{ .Position = position },
+            .message = "redundant use of annotation symbol # in annotation block",
+            .location = Location{ .position = position },
         };
     }
 
-    fn rawStringOptionWithoutRawMarker(token: *const tokenizer.Token) SyntaxError {
+    fn extraAnnotationWithoutSigil(token: *const tokenizer.Token) PragmaError {
         return .{
-            .message = "use of raw identifier without raw modifier prefix, did you mean to use r# ?",
-            .literal = token.literal,
-            .location = Location{ .Range = token.range() },
+            .message = "use of extra annotation (attribute) without extra modifier, did you mean to use x# ?",
+            .location = Location{ .range = token.range },
         };
     }
 
-    fn looseDocumentation(doc: StagedDocumentation) SyntaxError {
+    fn unusedDocumentation(position: usize) PragmaError {
         return .{
             .message = "unused documentation, use plain comments instead",
-            .literal = doc.boundaries.getFirstAssumeSafe(),
-            .location = Location{ .Position = doc.position },
+            .location = Location{ .position = position },
         };
     }
 
-    fn unexpectedEOF() SyntaxError {
+    fn unexpectedDocumentationPackage(position: usize) PragmaError {
+        return .{
+            .message = "unexpected package documentation",
+            .location = .{ .position = position },
+        };
+    }
+
+    fn unexpectedEOF() PragmaError {
         return .{
             .message = "unexpected end of file",
-            .literal = "",
-            .location = Location{ .Position = .empty() },
+            .location = Location{ .position = 0 },
         };
     }
 
-    fn enumVariantNumericalError(token: *const tokenizer.Token) SyntaxError {
+    fn enumVariantNumericalError(token: *const tokenizer.Token) PragmaError {
         return .{
             .message = "enum value must be a positive integer from 0 to 2^32-1",
-            .literal = token.literal,
-            .location = Location{ .Range = token.range() },
+            .location = Location{ .range = token.range },
         };
     }
 
-    fn fieldTagNumericalError(token: *const tokenizer.Token) SyntaxError {
+    fn fieldTagNumericalError(token: *const tokenizer.Token) PragmaError {
         return .{
             .message = "field tag value must be a positive integer from 1 to 2^32-1",
-            .literal = token.literal,
-            .location = Location{ .Range = token.range() },
+            .location = Location{ .range = token.range },
         };
     }
 
-    fn funcTagNumericalError(token: *const tokenizer.Token) SyntaxError {
+    fn funcTagNumericalError(token: *const tokenizer.Token) PragmaError {
         return .{
             .message = "func tag value must be a positive integer from 1 to 2^32-1",
-            .literal = token.literal,
-            .location = Location{ .Range = token.range() },
+            .location = Location{ .range = token.range },
         };
     }
 
-    fn duplicatedPact(selector: []const u8, range: ast.Range) SyntaxError {
-        return .{
-            .message = "duplicated pact statement, each document can have a single pact statement",
-            .literal = selector,
-            .location = Location{ .Range = range },
-        };
-    }
-
-    fn expectToken(token: *const tokenizer.Token, comptime expected: []const u8) SyntaxError {
+    fn expectToken(token: *const tokenizer.Token, comptime expected: []const u8) PragmaError {
         if (token.kind == .EOF) {
             return .unexpectedEOF();
         }
 
         return .{
             .message = "expected " ++ expected,
-            .literal = token.literal,
-            .location = Location{ .Position = token.position },
+            .location = Location{ .range = token.range },
         };
     }
 };
@@ -161,20 +148,20 @@ fn ParseResult(T: type) type {
     return struct {
         /// data is the
         data: T,
-        scopeExited: bool,
+        scope_exited: bool,
 
         const Self = @This();
 
         fn initOk(value: T) Self {
-            return .{ .data = value, .scopeExited = false };
+            return .{ .data = value, .scope_exited = false };
         }
 
         fn initScopeExited(value: T) Self {
-            return .{ .data = value, .scopeExited = true };
+            return .{ .data = value, .scope_exited = true };
         }
 
         fn initValue(value: T, scopeExited: bool) Self {
-            return .{ .data = value, .scopeExited = scopeExited };
+            return .{ .data = value, .scope_exited = scopeExited };
         }
     };
 }
@@ -189,42 +176,46 @@ const Context = struct {
         Bracket,
         Paran,
     };
-    const ErrorList = StackArray(SyntaxError, 10);
+    const ErrorList = StackArray(PragmaError, 10);
     const ScopeDelimiterList = StackArray(ScopeDelimiter, 10);
 
     const TokenKindTag = std.meta.Tag(tokenizer.TokenKind);
 
     allocator: Allocator,
-    transientAllocator: std.mem.Allocator,
+    transient_allocator: std.mem.Allocator,
     it: tokenizer.Iterator,
-    errors: ErrorList,
-    scopeDelimiters: ScopeDelimiterList,
-    stagedDocumentation: ?StagedDocumentation,
-    sharedStagedDocumentationStore: StagedDocumentation.Store,
+    errors: ErrorList = .init(),
+    scope_delimiters: ScopeDelimiterList = .init(),
+    staged_documentation: StagedDocumentation,
 
-    pact: ?ast.Selector,
-    imports: std.ArrayList(ast.Import),
-    options: std.ArrayList(ast.OptionAssignmentNode),
-    constants: std.ArrayList(ast.Constant),
-    enums: std.ArrayList(ast.Enum),
-    messages: std.ArrayList(ast.Struct),
-    optionDefinitions: std.ArrayList(ast.AnnotationDefinition),
-    interfaces: std.ArrayList(ast.Protocol),
-    documentation: ?ast.Documentation,
+    imports: std.ArrayList(ast.Import) = .empty,
+    annotations: std.ArrayList(ast.AnnotationNode) = .empty,
+    constants: std.ArrayList(ast.Constant) = .empty,
+    enums: std.ArrayList(ast.Enum) = .empty,
+    structs: std.ArrayList(ast.Struct) = .empty,
+    annotation_definitions: std.ArrayList(ast.AnnotationDefinition) = .empty,
+    protocols: std.ArrayList(ast.Protocol) = .empty,
+    documentation: ?ast.Documentation = null,
 
-    const EntryKeywords: []const TokenKindTag = &.{
-        .Pact,
-        .Import,
-        .RawHash,
+    const AnnotationStartTokens = [_]TokenKindTag{
         .Hash,
+        .ExtraHash,
         .PrivateHash,
+        .PrivateExtraHash,
+        .ExtraMode,
+        .PrivateMode,
+        .PrivateExtraMode,
+    };
+
+    const EntryKeywords = &([_]TokenKindTag{
+        .Import,
         .Const,
         .Enum,
-        .Message,
-        .Option,
-        .Interface,
+        .Struct,
+        .Annotation,
+        .Protocol,
         .Documentation,
-    };
+    } ++ AnnotationStartTokens);
 
     const ScopeDelimiterTokens: []const TokenKindTag = &.{
         .LeftCurlyBrace,
@@ -235,102 +226,74 @@ const Context = struct {
         .RightParan,
     };
 
-    const EnumBodyRecoveryPoints: []const TokenKindTag = &.{
-        .Hash,
-        .RawHash,
-        .PrivateHash,
+    const EnumBodyRecoveryPoints = &([_]TokenKindTag{
         .Identifier,
         .Documentation,
         .Comma,
-    };
+    } ++ AnnotationStartTokens);
 
-    const MessageBodyRecoveryPoints: []const TokenKindTag = &.{
+    const MessageBodyRecoveryPoints = &([_]TokenKindTag{
         .Identifier,
         .Embed,
         .Documentation,
-        .Hash,
-        .RawHash,
-        .PrivateHash,
         .OneOf,
         .Comma,
-    };
+    } ++ AnnotationStartTokens);
 
-    const InterfaceBodyRecoveryPoints: []const TokenKindTag = &.{
+    const InterfaceBodyRecoveryPoints = &([_]TokenKindTag{
         .Identifier,
         .Documentation,
-        .Hash,
-        .RawHash,
-        .PrivateHash,
         .Comma,
         .Semicolon,
-    };
+    } ++ AnnotationStartTokens);
 
-    fn init(allocator: Allocator, transientAllocator: Allocator, tokenIterator: tokenizer.Iterator) Context {
+    fn init(allocator: Allocator, transient_allocator: Allocator, token_iterator: tokenizer.Iterator) Context {
         return .{
             .allocator = allocator,
-            .transientAllocator = transientAllocator,
-            .it = tokenIterator,
-            .errors = ErrorList.init(),
-            .scopeDelimiters = ScopeDelimiterList.init(),
-            .stagedDocumentation = null,
-            .sharedStagedDocumentationStore = .init(transientAllocator),
-            .pact = null,
-            .imports = std.ArrayList(ast.Import).initCapacity(allocator, 0) catch unreachable,
-            .options = std.ArrayList(ast.OptionAssignmentNode).initCapacity(allocator, 0) catch unreachable,
-            .constants = std.ArrayList(ast.Constant).initCapacity(allocator, 0) catch unreachable,
-            .enums = std.ArrayList(ast.Enum).initCapacity(allocator, 0) catch unreachable,
-            .messages = std.ArrayList(ast.Struct).initCapacity(allocator, 0) catch unreachable,
-            .optionDefinitions = std.ArrayList(ast.AnnotationDefinition).initCapacity(allocator, 0) catch unreachable,
-            .interfaces = std.ArrayList(ast.Protocol).initCapacity(allocator, 0) catch unreachable,
-            .documentation = null,
+            .transient_allocator = transient_allocator,
+            .it = token_iterator,
+            .staged_documentation = .init(transient_allocator),
         };
     }
 
     fn parse(self: *Context) ParseError!void {
         self.it.fillTokenBufferIfNeeded();
-        if (try self.parseDocumentationGroup()) |doc| {
-            if (self.nextTokenAcceptsTopLevelDocumentation(doc)) {
-                self.stagedDocumentation = doc;
-            } else {
-                self.documentation = try self.processStagedDocumentation(doc);
-            }
-        }
+        // Read and set package documentation.
+        try self.consumePackageDocumentation();
 
         while (self.it.next()) |token| {
             (switch (token.kind) {
-                .Pact => self.processPact(),
                 .Import => self.processImport(),
                 .ExtraHash, .Hash, .PrivateHash => option: {
                     // NB: Special case where we need to consume the first token itself.
                     self.it.goBack();
-                    break :option self.processOption();
+                    break :option self.processAnnotation();
                 },
                 .Const => self.processConst(),
-                .Enum => self.processEnum(),
-                .Struct => self.processMessage(),
-                .Option => self.processOptionDefinition(),
-                .Protocol => self.processInterface(),
-                .Comment => {}, // ignore comments.
+                // .Enum => self.processEnum(),
+                // .Struct => self.processMessage(),
+                // .Annotation => self.processOptionDefinition(),
+                // .Protocol => self.processInterface(),
                 .Documentation => documentation: {
                     // NB: Special case where we need to consume the first token itself.
                     self.it.goBack();
-                    break :documentation self.captureDocumentationGroup();
+                    break :documentation self.stageDocumentationGroup();
                 },
                 .EOF => break,
                 else => blk: {
-                    self.addError(SyntaxError.unexpectedToken(&token));
-                    _ = self.skipTokensUntil(EntryKeywords, false) catch |err| break :blk err;
+                    self.addError(PragmaError.unexpectedToken(&token));
+                    _ = self.skipTokensUntil(EntryKeywords) catch |err| break :blk err;
                 },
             }) catch |err| switch (err) {
                 Allocator.Error.OutOfMemory => return Allocator.Error.OutOfMemory,
                 Error.NestingDepthReached => {
-                    self.addError(SyntaxError.nestingDepthReached(self.it.currentAssumeSafe().position));
+                    self.addError(PragmaError.nestingDepthReached(self.currentRangeAssumeSafe().start));
                     return;
                 },
                 Error.UnexpectedToken => {
                     self.it.goBack();
-                    _ = self.skipTokensUntil(EntryKeywords, false) catch {
-                        self.addError(SyntaxError.nestingDepthReached(self.it.currentAssumeSafe().position));
+                    _ = self.skipTokensUntil(EntryKeywords) catch {
+                        self.addError(PragmaError.nestingDepthReached(self.currentRangeAssumeSafe().start));
                         return;
                     };
                 },
@@ -339,36 +302,27 @@ const Context = struct {
         }
     }
 
-    fn processPact(self: *Context) Error!void {
-        const selector = try self.parseSelector();
-        if (self.pact == null) {
-            self.pact = selector;
-        } else self.addError(SyntaxError.duplicatedPact(selector.content, selector.range));
-    }
-
     fn processImport(self: *Context) Error!void {
         try self.processGroup(processImportBody);
     }
 
     fn processImportBody(self: *Context) Error!void {
-        const start = self.currentPosition();
-        const implicit = self.consumeOptionalTokenBool(.Underscore);
+        const start = self.currentRangeAssumeSafe().start;
+        const bare = self.consumeOptionalTokenBool(.Hash);
         var alias: []const u8 = "";
 
-        if (!implicit) {
-            if (self.consumeOptionalToken(.Identifier)) |aliasToken| {
-                alias = try self.copyString(aliasToken.literal);
-            }
+        if (self.consumeOptionalToken(.Identifier)) |alias_token| {
+            alias = try self.copyString(alias_token.literal);
         }
 
-        const pathToken = self.consumeRequiredToken(.String, "path string") catch |err| {
-            return self.recover(err, &.{ .String, .Underscore, .Identifier }, true);
+        const path_token = self.consumeRequiredToken(.String, "path string") catch |err| {
+            return self.recover(err, &.{ .String, .Hash, .Identifier });
         };
         try self.imports.append(self.allocator, .{
-            .bare = implicit,
+            .bare = bare,
             .alias = alias,
-            .path = try pathToken.kind.String.toOwnedAndEscaped(self.allocator),
-            .range = .{ .start = start, .endOffset = pathToken.endOffset() },
+            .path = try path_token.kind.String.toOwnedAndEscaped(self.allocator),
+            .range = .{ .start = start, .end = path_token.range.end },
         });
     }
 
@@ -378,676 +332,679 @@ const Context = struct {
 
     inline fn addConst(
         self: *Context,
-        name: []const u8,
-        value: ast.RangedValue,
+        name: tokenizer.Token,
+        value: ast.RangedLiteral,
         documentation: ?ast.Documentation,
-        start: ast.Position,
-        options: []ast.OptionAssignmentNode,
+        start: usize,
+        annotations: []ast.AnnotationNode,
     ) Allocator.Error!void {
         try self.constants.append(self.allocator, ast.Constant{
-            .name = try self.copyString(name),
+            .name = .{ .value = try self.copyString(name.literal), .range = name.range },
             .value = value,
             .documentation = documentation,
-            .annotations = options,
-            .range = .{ .start = start, .endOffset = self.it.currentAssumeSafe().endOffset() },
+            .annotations = annotations,
+            .range = .{ .start = start, .end = self.currentRangeAssumeSafe().end },
         });
     }
 
     fn processConstBody(self: *Context) Error!void {
         const ConstRecoveryPoints: []const TokenKindTag = &.{ .Documentation, .Identifier };
-        const documentation = try self.parseDocumentationGroupForCurrentPosition();
-        const start = self.currentPosition();
-        const nameToken = self.consumeRequiredToken(.Identifier, "const name") catch |err| {
-            return self.recover(err, ConstRecoveryPoints, false);
+        const documentation = try self.consumeStagedDocumentation();
+        const start = self.currentRangeAssumeSafe().start;
+        const name_token = self.consumeRequiredToken(.Identifier, "const name") catch |err| {
+            return self.recover(err, ConstRecoveryPoints);
         };
+        // TODO: already can prepare the const and avoid the addConst function calls.
         _ = self.consumeRequiredToken(.Equal, "=") catch |err| {
-            return self.recover(err, ConstRecoveryPoints, false);
+            return self.recover(err, ConstRecoveryPoints);
         };
 
         const value = if (self.parseValue()) |v| blk: {
-            if (v.scopeExited) {
-                try self.addConst(nameToken.literal, v.data, documentation, start, &.{});
+            if (v.scope_exited) {
+                try self.addConst(name_token, v.data, documentation, start, &.{});
                 return;
             }
             break :blk v.data;
-        } else |err| return self.recover(err, ConstRecoveryPoints, false);
+        } else |err| return self.recover(err, ConstRecoveryPoints);
 
-        const options: []ast.OptionAssignmentNode = if (self.nextTokenIs(.LeftCurlyBrace)) blk: {
-            if (self.parseOptionBlock()) |v| {
-                if (v.scopeExited) {
-                    try self.addConst(nameToken.literal, value, documentation, start, v.data);
-                    return;
-                }
+        const annotations: []ast.AnnotationNode = if (self.nextTokenIs(.LeftCurlyBrace)) blk: {
+            if (self.parseAnnotationBlock()) |v| {
                 break :blk v.data;
             } else |err| {
-                try self.addConst(nameToken.literal, value, documentation, start, &.{});
-                return self.recover(err, ConstRecoveryPoints, false);
+                try self.addConst(name_token, value, documentation, start, &.{});
+                return self.recover(err, ConstRecoveryPoints);
             }
         } else &.{};
 
-        try self.addConst(nameToken.literal, value, documentation, start, options);
+        try self.addConst(name_token, value, documentation, start, annotations);
     }
 
-    fn processEnum(self: *Context) Error!void {
-        try self.processGroup(processEnumBody);
-    }
+    // fn processEnum(self: *Context) Error!void {
+    //     try self.processGroup(processEnumBody);
+    // }
+    //
+    // fn processEnumBody(self: *Context) Error!void {
+    //     const EnumEntryRecoveryPoints: []const TokenKindTag = &.{ .Documentation, .Identifier };
+    //     const documentation = try self.parseDocumentationGroupForCurrentPosition();
+    //     const nameToken = self.consumeRequiredToken(.Identifier, "enum name") catch |err| {
+    //         return self.recover(err, EnumEntryRecoveryPoints, false);
+    //     };
+    //     _ = self.consumeRequiredToken(.LeftCurlyBrace, "{") catch |err| {
+    //         return self.recover(err, EnumEntryRecoveryPoints, false);
+    //     };
+    //
+    //     var options = StackFallbackArray(ast.OptionAssignmentNode, 20).init(self.transient_allocator);
+    //     var variants = StackFallbackArray(ast.EnumVariant, 20).init(self.transient_allocator);
+    //     while (true) {
+    //         const token = try self.peekNextOrError();
+    //         switch (token.kind) {
+    //             .Comment => self.consume(),
+    //             .Hash, .ExtraHash, .PrivateHash => if (self.parseOption(false, null)) |v| {
+    //                 try options.append(v.data);
+    //                 if (v.scope_exited) break;
+    //             } else |err| if (try self.recoverExitsScope(err, EnumBodyRecoveryPoints))
+    //                 break,
+    //             .Identifier => if (self.parseEnumVariant()) |v| {
+    //                 try variants.append(v.data);
+    //                 if (v.scope_exited) break;
+    //             } else |err| if (try self.recoverExitsScope(err, EnumBodyRecoveryPoints))
+    //                 break,
+    //             .Documentation => try self.captureDocumentationGroup(),
+    //             .RightCurlyBrace => {
+    //                 self.consume();
+    //                 self.popScopeDelimiter(.CurlyBrace);
+    //                 break;
+    //             },
+    //             .Comma => self.consume(),
+    //             else => {
+    //                 self.addError(PragmaError.unexpectedToken(&token));
+    //                 if (try self.skipTokensUntil(EnumBodyRecoveryPoints, false))
+    //                     break;
+    //             },
+    //         }
+    //         _ = self.consumeOptionalTokenBool(.Comma);
+    //     }
+    //
+    //     try self.enums.append(self.allocator, ast.Enum{
+    //         .name = ast.Identifier{
+    //             .value = try self.copyString(nameToken.literal),
+    //             .range = nameToken.range(),
+    //         },
+    //         .variants = try variants.toOwnedSlice(self.allocator),
+    //         .documentation = documentation,
+    //         .annotations = try options.toOwnedSlice(self.allocator),
+    //         .range = .{ .start = nameToken.position, .endOffset = self.it.currentAssumeSafe().endOffset() },
+    //     });
+    // }
 
-    fn processEnumBody(self: *Context) Error!void {
-        const EnumEntryRecoveryPoints: []const TokenKindTag = &.{ .Documentation, .Identifier };
-        const documentation = try self.parseDocumentationGroupForCurrentPosition();
-        const nameToken = self.consumeRequiredToken(.Identifier, "enum name") catch |err| {
-            return self.recover(err, EnumEntryRecoveryPoints, false);
-        };
-        _ = self.consumeRequiredToken(.LeftCurlyBrace, "{") catch |err| {
-            return self.recover(err, EnumEntryRecoveryPoints, false);
-        };
+    // inline fn buildEnumVariant(
+    //     self: *Context,
+    //     nameToken: tokenizer.Token,
+    //     value: ?u32,
+    //     documentation: ?ast.Documentation,
+    //     options: []const ast.OptionAssignmentNode,
+    // ) Allocator.Error!ast.EnumVariant {
+    //     return .{
+    //         .name = ast.Identifier{
+    //             .value = try self.copyString(nameToken.literal),
+    //             .range = nameToken.range(),
+    //         },
+    //         .value = value,
+    //         .documentation = documentation,
+    //         .annotations = options,
+    //         .range = .{
+    //             .start = nameToken.position,
+    //             .endOffset = self.it.currentAssumeSafe().endOffset(),
+    //         },
+    //     };
+    // }
 
-        var options = StackFallbackArray(ast.OptionAssignmentNode, 20).init(self.transientAllocator);
-        var variants = StackFallbackArray(ast.EnumVariant, 20).init(self.transientAllocator);
-        while (true) {
-            const token = try self.peekNextOrError();
-            switch (token.kind) {
-                .Comment => self.consume(),
-                .Hash, .ExtraHash, .PrivateHash => if (self.parseOption(false, null)) |v| {
-                    try options.append(v.data);
-                    if (v.scopeExited) break;
-                } else |err| if (try self.recoverExitsScope(err, EnumBodyRecoveryPoints, true))
-                    break,
-                .Identifier => if (self.parseEnumVariant()) |v| {
-                    try variants.append(v.data);
-                    if (v.scopeExited) break;
-                } else |err| if (try self.recoverExitsScope(err, EnumBodyRecoveryPoints, true))
-                    break,
-                .Documentation => try self.captureDocumentationGroup(),
-                .RightCurlyBrace => {
-                    self.consume();
-                    self.popScopeDelimiter(.CurlyBrace);
-                    break;
-                },
-                .Comma => self.consume(),
-                else => {
-                    self.addError(SyntaxError.unexpectedToken(&token));
-                    if (try self.skipTokensUntil(EnumBodyRecoveryPoints, false))
-                        break;
-                },
-            }
-            _ = self.consumeOptionalTokenBool(.Comma);
-        }
+    // fn parseEnumVariant(self: *Context) Error!ParseResult(ast.EnumVariant) {
+    //     const documentation = try self.consumeStagedDocumentationFor(self.it.currentAssumeSafe().position);
+    //     const nameToken = try self.consumeRequiredToken(.Identifier, "enum value");
+    //     var value: ?u32 = null;
+    //
+    //     if (self.consumeOptionalTokenBool(.Equal)) {
+    //         // explicit assignment.
+    //         if (self.consumeRequiredToken(.Integer, "enum variant numerical value")) |valueToken| {
+    //             if (std.math.cast(u32, valueToken.kind.Integer)) |tag| {
+    //                 value = tag;
+    //             } else self.addError(PragmaError.enumVariantNumericalError(&valueToken));
+    //         } else |err| if (try self.recoverExitsScope(err, &.{ .RawHash, .Hash, .PrivateHash, .Comma })) {
+    //             return .initScopeExited(
+    //                 try self.buildEnumVariant(nameToken, null, documentation, &.{}),
+    //             );
+    //         }
+    //     }
+    //
+    //     return if (self.parseItemOptions(.Comma)) |v| .initValue(
+    //         try self.buildEnumVariant(nameToken, value, documentation, v.data),
+    //         v.scope_exited,
+    //     ) else |err| .initValue(
+    //         try self.buildEnumVariant(nameToken, value, documentation, &.{}),
+    //         try self.recoverExitsScope(err, EnumBodyRecoveryPoints),
+    //     );
+    // }
 
-        try self.enums.append(self.allocator, ast.Enum{
-            .name = ast.Identifier{
-                .value = try self.copyString(nameToken.literal),
-                .range = nameToken.range(),
-            },
-            .variants = try variants.toOwnedSlice(self.allocator),
-            .documentation = documentation,
-            .annotations = try options.toOwnedSlice(self.allocator),
-            .range = .{ .start = nameToken.position, .endOffset = self.it.currentAssumeSafe().endOffset() },
-        });
-    }
+    // fn processMessage(self: *Context) Error!void {
+    //     try self.processGroup(processMessageBody);
+    // }
 
-    inline fn buildEnumVariant(
-        self: *Context,
-        nameToken: tokenizer.Token,
-        value: ?u32,
-        documentation: ?ast.Documentation,
-        options: []const ast.OptionAssignmentNode,
-    ) Allocator.Error!ast.EnumVariant {
-        return .{
-            .name = ast.Identifier{
-                .value = try self.copyString(nameToken.literal),
-                .range = nameToken.range(),
-            },
-            .value = value,
-            .documentation = documentation,
-            .annotations = options,
-            .range = .{
-                .start = nameToken.position,
-                .endOffset = self.it.currentAssumeSafe().endOffset(),
-            },
-        };
-    }
+    // fn processMessageBody(self: *Context) Error!void {
+    //     const MessageEntryRecoveryPoints: []const TokenKindTag = &.{ .Documentation, .Identifier };
+    //     const documentation = try self.parseDocumentationGroupForCurrentPosition();
+    //     const nameToken = self.consumeRequiredToken(.Identifier, "message name") catch |err| {
+    //         return self.recover(err, MessageEntryRecoveryPoints, true);
+    //     };
+    //     _ = self.consumeRequiredToken(.LeftCurlyBrace, "{") catch |err| {
+    //         return self.recover(err, MessageEntryRecoveryPoints, false);
+    //     };
+    //
+    //     var options = StackFallbackArray(ast.OptionAssignmentNode, 20).init(self.transient_allocator);
+    //     var fields = StackFallbackArray(ast.Field, 40).init(self.transient_allocator);
+    //     var embeddedMessages = StackFallbackArray(ast.Selector, 10).init(self.transient_allocator);
+    //     var oneOfGroups = StackFallbackArray(ast.OneOf, 10).init(self.transient_allocator);
+    //
+    //     while (true) {
+    //         const token = try self.peekNextOrError();
+    //         switch (token.kind) {
+    //             .Comment, .Comma => self.consume(),
+    //             .Documentation => try self.captureDocumentationGroup(),
+    //             .Hash, .ExtraHash, .PrivateHash => if (self.parseOption(false, null)) |v| {
+    //                 try options.append(v.data);
+    //                 if (v.scope_exited) break;
+    //             } else |err| if (try self.recoverExitsScope(err, MessageBodyRecoveryPoints))
+    //                 break,
+    //             .Identifier => if (self.parseField(null)) |v| {
+    //                 try fields.append(v.data);
+    //                 if (v.scope_exited) break;
+    //             } else |err| if (try self.recoverExitsScope(err, &.{.Comma}))
+    //                 break,
+    //             .Embed => {
+    //                 self.consume();
+    //                 if (self.parseSelector()) |selector| {
+    //                     // TODO: Might need to keep the field index just so that the position is clear.
+    //                     try embeddedMessages.append(selector);
+    //                 } else |err| if (try self.recoverExitsScope(err, MessageBodyRecoveryPoints)) break;
+    //             },
+    //             .OneOf => {
+    //                 const start = token.position;
+    //                 self.consume();
+    //                 const oneOfNameToken = self.consumeRequiredToken(.Identifier, "oneof group name") catch |err|
+    //                     if (try self.recoverExitsScope(err, MessageBodyRecoveryPoints)) break else continue;
+    //                 if (self.processOneOfBody(@intCast(oneOfGroups.len()), &fields)) |v| {
+    //                     try oneOfGroups.append(ast.OneOf{
+    //                         .name = ast.Identifier{
+    //                             .value = try self.copyString(oneOfNameToken.literal),
+    //                             .range = nameToken.range(),
+    //                         },
+    //                         .annotations = v.data.options,
+    //                         .range = ast.Range{
+    //                             .start = start,
+    //                             .endOffset = self.it.currentAssumeSafe().endOffset(),
+    //                         },
+    //                     });
+    //                 } else |err| if (try self.recoverExitsScope(err, MessageBodyRecoveryPoints)) break;
+    //             },
+    //             .RightCurlyBrace => {
+    //                 self.consume();
+    //                 self.popScopeDelimiter(.CurlyBrace);
+    //                 break;
+    //             },
+    //             else => {
+    //                 self.addError(PragmaError.unexpectedToken(&token));
+    //                 if (try self.skipTokensUntil(MessageBodyRecoveryPoints)) {
+    //                     break;
+    //                 }
+    //             },
+    //         }
+    //         _ = self.consumeOptionalTokenBool(.Comma);
+    //     }
+    //
+    //     try self.structs.append(self.allocator, ast.Struct{
+    //         .name = ast.Identifier{
+    //             .value = try self.copyString(nameToken.literal),
+    //             .range = nameToken.range(),
+    //         },
+    //         .embedded_structs = try embeddedMessages.toOwnedSlice(self.allocator),
+    //         .documentation = documentation,
+    //         .fields = try fields.toOwnedSlice(self.allocator),
+    //         .annotations = try options.toOwnedSlice(self.allocator),
+    //         .oneof_groups = try oneOfGroups.toOwnedSlice(self.allocator),
+    //         .range = .{ .start = nameToken.position, .endOffset = self.it.currentAssumeSafe().endOffset() },
+    //     });
+    // }
 
-    fn parseEnumVariant(self: *Context) Error!ParseResult(ast.EnumVariant) {
-        const documentation = try self.consumeStagedDocumentationFor(self.it.currentAssumeSafe().position);
-        const nameToken = try self.consumeRequiredToken(.Identifier, "enum value");
-        var value: ?u32 = null;
+    // inline fn buildField(
+    //     self: *Context,
+    //     nameToken: tokenizer.Token,
+    //     documentation: ?ast.Documentation,
+    //     options: []ast.OptionAssignmentNode,
+    //     nullable: bool,
+    //     tag: ?u16,
+    //     dataType: ast.Field.RangedDataType,
+    //     oneOfGroupIndex: ?u16,
+    // ) Allocator.Error!ast.Field {
+    //     return ast.Field{
+    //         .name = .{
+    //             .value = try self.copyString(nameToken.literal),
+    //             .range = nameToken.range(),
+    //         },
+    //         .documentation = documentation,
+    //         .annotations = options,
+    //         .nullable = nullable,
+    //         .range = ast.Range{
+    //             .start = nameToken.position,
+    //             .endOffset = self.it.currentAssumeSafe().endOffset(),
+    //         },
+    //         .tag = tag,
+    //         .data_type = dataType,
+    //         .oneof_group_index = oneOfGroupIndex,
+    //     };
+    // }
 
-        if (self.consumeOptionalTokenBool(.Equal)) {
-            // explicit assignment.
-            if (self.consumeRequiredToken(.Integer, "enum variant numerical value")) |valueToken| {
-                if (std.math.cast(u32, valueToken.kind.Integer)) |tag| {
-                    value = tag;
-                } else self.addError(SyntaxError.enumVariantNumericalError(&valueToken));
-            } else |err| if (try self.recoverExitsScope(err, &.{ .RawHash, .Hash, .PrivateHash, .Comma }, true)) {
-                return .initScopeExited(
-                    try self.buildEnumVariant(nameToken, null, documentation, &.{}),
-                );
-            }
-        }
+    // fn parseField(self: *Context, oneOfGroupIndex: ?u16) Error!ParseResult(ast.Field) {
+    //     const documentation = try self.consumeStagedDocumentationFor(self.it.currentAssumeSafe().position);
+    //     const nameToken = try self.consumeRequiredToken(.Identifier, "field name");
+    //     _ = try self.consumeRequiredToken(.Colon, ":");
+    //     const nullable = self.consumeOptionalTokenBool(.QuestionMark);
+    //
+    //     const dataType = try self.parseFieldDataType();
+    //     if (dataType.scope_exited) {
+    //         return .initScopeExited(
+    //             try self.buildField(nameToken, documentation, &.{}, nullable, null, dataType.data, oneOfGroupIndex),
+    //         );
+    //     }
+    //     var tag: ?u16 = null;
+    //     if (self.consumeOptionalTokenBool(.Equal)) {
+    //         if (self.consumeRequiredToken(.Integer, "field tag number")) |tagToken| {
+    //             if (std.math.cast(u16, tagToken.kind.Integer)) |tagValue| {
+    //                 if (tagValue == 0) {
+    //                     self.addError(PragmaError.fieldTagNumericalError(&tagToken));
+    //                 }
+    //                 tag = tagValue;
+    //             } else self.addError(PragmaError.fieldTagNumericalError(&tagToken));
+    //         } else |err| if (try self.recoverExitsScope(err, &.{ .Hash, .RawHash, .PrivateHash, .Comma })) {
+    //             return .initScopeExited(
+    //                 try self.buildField(nameToken, documentation, &.{}, nullable, tag, dataType.data, oneOfGroupIndex),
+    //             );
+    //         }
+    //     }
+    //
+    //     return if (self.parseItemOptions(.Comma)) |v| .initValue(
+    //         try self.buildField(nameToken, documentation, v.data, nullable, tag, dataType.data, oneOfGroupIndex),
+    //         v.scope_exited,
+    //     ) else |err| .initValue(
+    //         try self.buildField(nameToken, documentation, &.{}, nullable, tag, dataType.data, oneOfGroupIndex),
+    //         try self.recoverExitsScope(err, MessageBodyRecoveryPoints),
+    //     );
+    // }
+    //
+    // fn parseFieldDataType(self: *Context) Error!ParseResult(ast.Field.RangedDataType) {
+    //     const nextToken = try self.peekNextOrError();
+    //     switch (nextToken.kind) {
+    //         .Identifier => {
+    //             const typeSelector = try self.parseSelector();
+    //             return .initOk(ast.Field.RangedDataType{
+    //                 .value = .{ .String = typeSelector },
+    //                 .range = typeSelector.range,
+    //             });
+    //         },
+    //         .OneOf => {
+    //             const start = nextToken.position;
+    //             self.consume();
+    //             const oneOfBody = try self.parseOneOfBodyType();
+    //             return .initValue(ast.Field.RangedDataType{
+    //                 .value = .{ .OneOf = oneOfBody.data },
+    //                 .range = ast.Range{
+    //                     .start = start,
+    //                     .endOffset = self.it.currentAssumeSafe().endOffset(),
+    //                 },
+    //             }, oneOfBody.scope_exited);
+    //         },
+    //         .List => {
+    //             const start = nextToken.position;
+    //             self.consume();
+    //             _ = try self.consumeRequiredToken(.LessThan, "<");
+    //             const typeSelector = try self.parseSelector();
+    //             const lastToken = try self.consumeRequiredToken(.GreaterThan, ">");
+    //             return .initOk(ast.Field.RangedDataType{
+    //                 .value = .{ .List = typeSelector },
+    //                 .range = ast.Range{ .start = start, .endOffset = lastToken.endOffset() },
+    //             });
+    //         },
+    //         .Map => {
+    //             const start = nextToken.position;
+    //             self.consume();
+    //             _ = try self.consumeRequiredToken(.LessThan, "<");
+    //             const keyTypeSelector = try self.parseSelector();
+    //             _ = try self.consumeRequiredToken(.Comma, ",");
+    //             const valueTypeSelector = try self.parseSelector();
+    //             const lastToken = try self.consumeRequiredToken(.GreaterThan, ">");
+    //             return .initOk(ast.Field.RangedDataType{
+    //                 .value = .{ .Map = .{ .key = keyTypeSelector, .value = valueTypeSelector } },
+    //                 .range = ast.Range{ .start = start, .endOffset = lastToken.endOffset() },
+    //             });
+    //         },
+    //         else => {
+    //             self.addError(PragmaError.expectToken(&nextToken, "field type"));
+    //             self.consume();
+    //             return Error.UnexpectedToken;
+    //         },
+    //     }
+    // }
+    //
+    // fn processOneOfBody(
+    //     self: *Context,
+    //     oneOfGroupIndex: ?u16,
+    //     fields: *StackFallbackArray(ast.Field, 40),
+    // ) Error!ParseResult(struct { options: []const ast.OptionAssignmentNode }) {
+    //     const OneOfBodyRecoveryPoints: []const TokenKindTag = &.{
+    //         .Hash,
+    //         .PrivateHash,
+    //         .RawHash,
+    //         .Comma,
+    //         .Identifier,
+    //     };
+    //     _ = try self.consumeRequiredToken(.LeftCurlyBrace, "{");
+    //     var options = StackFallbackArray(ast.OptionAssignmentNode, 20).init(self.transient_allocator);
+    //     const currentScope = self.scopeDelimiterContext();
+    //
+    //     const scopeExited = blk: {
+    //         while (true) {
+    //             const nextToken = self.it.peek(1) orelse break :blk false;
+    //             switch (nextToken.kind) {
+    //                 .Identifier => if (self.parseField(oneOfGroupIndex)) |v| {
+    //                     // append the field
+    //                     try fields.append(v.data);
+    //                     if (v.scope_exited) break :blk true;
+    //                 } else |err| if (try self.recoverExitsScope(err, &.{.Comma}))
+    //                     break :blk true,
+    //                 .Hash, .ExtraHash, .PrivateHash => if (self.parseOption(false, null)) |v| {
+    //                     try options.append(v.data);
+    //                     if (v.scope_exited) break :blk true;
+    //                 } else |err| if (try self.recoverExitsScope(err, OneOfBodyRecoveryPoints))
+    //                     break :blk true,
+    //                 .RightCurlyBrace => {
+    //                     self.consume();
+    //                     self.popScopeDelimiter(.CurlyBrace);
+    //                     break :blk false;
+    //                 },
+    //                 .Comma => self.consume(),
+    //                 else => {
+    //                     self.addError(PragmaError.unexpectedToken(&nextToken));
+    //                     if (try self.skipTokensUntil(OneOfBodyRecoveryPoints))
+    //                         break :blk true;
+    //                 },
+    //             }
+    //             _ = self.consumeOptionalTokenBool(.Comma);
+    //         }
+    //     };
+    //
+    //     return .initValue(
+    //         .{ .options = try options.toOwnedSlice(self.allocator) },
+    //         scopeExited and self.scopeDelimiterContext() + 1 != currentScope,
+    //     );
+    // }
+    //
+    // /// parses oneof body that is a field type, not a grouping.
+    // fn parseOneOfBodyType(
+    //     self: *Context,
+    // ) Error!ParseResult(ast.Field.OneOfTypeInfo) {
+    //     var fields = StackFallbackArray(ast.Field, 40).init(self.transient_allocator);
+    //     return if (self.processOneOfBody(null, &fields)) |result| .initValue(.{
+    //         .fields = try fields.toOwnedSlice(self.allocator),
+    //         .options = result.data.options,
+    //     }, result.scope_exited) else |err| err;
+    // }
+    //
+    // fn parseItemOptions(
+    //     self: *Context,
+    //     comptime terminationToken: TokenKindTag,
+    // ) Error!ParseResult([]ast.OptionAssignmentNode) {
+    //     const RecoveryPoints: []const TokenKindTag = &.{ terminationToken, .RawHash, .Hash, .PrivateHash };
+    //
+    //     if (self.nextTokenIs(.LeftCurlyBrace)) {
+    //         return self.parseAnnotationBlock();
+    //     }
+    //
+    //     var values = StackFallbackArray(ast.OptionAssignmentNode, 10).init(self.transient_allocator);
+    //     const scopeExited = blk: {
+    //         while (true) {
+    //             const token = self.it.peek(1) orelse break :blk false;
+    //             if (token.kind == .RightCurlyBrace or token.kind == terminationToken) {
+    //                 break :blk false;
+    //             }
+    //             if (self.parseOption(false, null)) |v| {
+    //                 try values.append(v.data);
+    //                 if (v.scope_exited) break :blk true;
+    //             } else |err| if (try self.recoverExitsScope(err, RecoveryPoints))
+    //                 break :blk true
+    //             else if (!self.nextTokenIsOneOf(RecoveryPoints)) break :blk false;
+    //             // NB: If next token is not an option token, exit out of option parsing loop.
+    //         }
+    //     };
+    //
+    //     return .initValue(try values.toOwnedSlice(self.allocator), scopeExited);
+    // }
 
-        return if (self.parseItemOptions(.Comma)) |v| .initValue(
-            try self.buildEnumVariant(nameToken, value, documentation, v.data),
-            v.scopeExited,
-        ) else |err| .initValue(
-            try self.buildEnumVariant(nameToken, value, documentation, &.{}),
-            try self.recoverExitsScope(err, EnumBodyRecoveryPoints, true),
-        );
-    }
+    // fn processOptionDefinition(self: *Context) Error!void {
+    //     const start = self.it.currentAssumeSafe().position;
+    //     _ = try self.consumeRequiredToken(.For, "for");
+    //
+    //     var targetSet = ast.AnnotationTargetSet.init(.{});
+    //     targetSet.insert(try self.parseOptionTarget());
+    //     while (true) {
+    //         const nextToken = try self.peekNextOrError();
+    //         if (nextToken.kind == .LeftCurlyBrace) {
+    //             self.consume();
+    //             break;
+    //         }
+    //         _ = try self.consumeRequiredToken(.Comma, ",");
+    //         targetSet.insert(try self.parseOptionTarget());
+    //     }
+    //
+    //     var fields = StackFallbackArray(ast.Field, 40).init(self.transient_allocator);
+    //
+    //     while (true) {
+    //         const nextToken = try self.peekNextOrError();
+    //         switch (nextToken.kind) {
+    //             .Comment, .Comma => self.consume(),
+    //             .RightCurlyBrace => {
+    //                 self.consume();
+    //                 break;
+    //             },
+    //             else => if (self.parseField(null)) |v| {
+    //                 try fields.append(v.data);
+    //                 if (v.scope_exited) break;
+    //             } else |err| if (try self.recoverExitsScope(err, &.{.Comma}))
+    //                 break,
+    //         }
+    //     }
+    //
+    //     try self.annotation_definitions.append(self.allocator, ast.AnnotationDefinition{
+    //         .targets = targetSet,
+    //         .fields = try fields.toOwnedSlice(self.allocator),
+    //         .range = .{
+    //             .start = start,
+    //             .endOffset = self.it.currentAssumeSafe().endOffset(),
+    //         },
+    //     });
+    // }
+    //
+    // inline fn parseOptionTarget(self: *Context) Error!ast.AnnotationTarget {
+    //     const targetToken = self.it.next() orelse {
+    //         self.addError(PragmaError.unexpectedEOF());
+    //         return Error.UnexpectedEOF;
+    //     };
+    //     switch (targetToken.kind) {
+    //         .TargetPackage => return ast.AnnotationTarget.Package,
+    //         .TargetOneOf => return ast.AnnotationTarget.OneOf,
+    //         .TargetEnum => return ast.AnnotationTarget.Enum,
+    //         .TargetConst => return ast.AnnotationTarget.Constant,
+    //         .TargetEnumVariant => return ast.AnnotationTarget.EnumVariant,
+    //         .TargetStruct => return ast.AnnotationTarget.Struct,
+    //         .TargetField => return ast.AnnotationTarget.Field,
+    //         .TargetProtocol => return ast.AnnotationTarget.Protocol,
+    //         .TargetFunc => return ast.AnnotationTarget.Func,
+    //         else => {
+    //             self.addError(PragmaError.expectToken(&targetToken, "option target"));
+    //             return Error.UnexpectedToken;
+    //         },
+    //     }
+    // }
 
-    fn processMessage(self: *Context) Error!void {
-        try self.processGroup(processMessageBody);
-    }
+    // fn processInterface(self: *Context) Error!void {
+    //     try self.processGroup(processInterfaceBody);
+    // }
+    //
+    // fn processInterfaceBody(self: *Context) Error!void {
+    //     const InterfaceRecoveryPoints: []const TokenKindTag = &.{ .Interface, .Documentation };
+    //     const documentation = try self.parseDocumentationGroupForCurrentPosition();
+    //     const nameToken = self.consumeRequiredToken(.Identifier, "interface name") catch |err|
+    //         return self.recover(err, InterfaceRecoveryPoints, true);
+    //
+    //     _ = self.consumeRequiredToken(.LeftCurlyBrace, "") catch |err|
+    //         return self.recover(err, InterfaceRecoveryPoints, false);
+    //
+    //     var funcs = StackFallbackArray(ast.Func, 40).init(self.transient_allocator);
+    //     var options = StackFallbackArray(ast.OptionAssignmentNode, 20).init(self.transient_allocator);
+    //
+    //     while (true) {
+    //         const token = try self.peekNextOrError();
+    //         switch (token.kind) {
+    //             .Semicolon, .Comma, .Comment => self.consume(),
+    //             .Hash, .PrivateHash, .ExtraHash => if (self.parseOption(false, null)) |v| {
+    //                 try options.append(v.data);
+    //                 if (v.scope_exited) break;
+    //             } else |err| if (try self.recoverExitsScope(err, InterfaceBodyRecoveryPoints))
+    //                 break,
+    //             .Documentation => try self.captureDocumentationGroup(),
+    //             .Identifier => if (self.parseFunc()) |v| {
+    //                 try funcs.append(v.data);
+    //                 if (v.scope_exited) break;
+    //             } else |err| if (try self.recoverExitsScope(err, &.{.Semicolon}))
+    //                 break,
+    //             .RightCurlyBrace => {
+    //                 self.consume();
+    //                 self.popScopeDelimiter(.CurlyBrace);
+    //                 break;
+    //             },
+    //             else => {
+    //                 self.addError(PragmaError.unexpectedToken(&token));
+    //                 if (try self.skipTokensUntil(InterfaceBodyRecoveryPoints)) {
+    //                     break;
+    //                 }
+    //             },
+    //         }
+    //     }
+    //
+    //     try self.protocols.append(self.allocator, ast.Protocol{
+    //         .name = ast.Identifier{
+    //             .value = try self.copyString(nameToken.literal),
+    //             .range = nameToken.range(),
+    //         },
+    //         .funcs = try funcs.toOwnedSlice(self.allocator),
+    //         .documentation = documentation,
+    //         .annotations = try options.toOwnedSlice(self.allocator),
+    //         .range = ast.Range{
+    //             .start = nameToken.position,
+    //             .endOffset = self.it.currentAssumeSafe().endOffset(),
+    //         },
+    //     });
+    // }
 
-    fn processMessageBody(self: *Context) Error!void {
-        const MessageEntryRecoveryPoints: []const TokenKindTag = &.{ .Documentation, .Identifier };
-        const documentation = try self.parseDocumentationGroupForCurrentPosition();
-        const nameToken = self.consumeRequiredToken(.Identifier, "message name") catch |err| {
-            return self.recover(err, MessageEntryRecoveryPoints, true);
-        };
-        _ = self.consumeRequiredToken(.LeftCurlyBrace, "{") catch |err| {
-            return self.recover(err, MessageEntryRecoveryPoints, false);
-        };
-
-        var options = StackFallbackArray(ast.OptionAssignmentNode, 20).init(self.transientAllocator);
-        var fields = StackFallbackArray(ast.Field, 40).init(self.transientAllocator);
-        var embeddedMessages = StackFallbackArray(ast.Selector, 10).init(self.transientAllocator);
-        var oneOfGroups = StackFallbackArray(ast.OneOf, 10).init(self.transientAllocator);
-
-        while (true) {
-            const token = try self.peekNextOrError();
-            switch (token.kind) {
-                .Comment, .Comma => self.consume(),
-                .Documentation => try self.captureDocumentationGroup(),
-                .Hash, .ExtraHash, .PrivateHash => if (self.parseOption(false, null)) |v| {
-                    try options.append(v.data);
-                    if (v.scopeExited) break;
-                } else |err| if (try self.recoverExitsScope(err, MessageBodyRecoveryPoints, true))
-                    break,
-                .Identifier => if (self.parseField(null)) |v| {
-                    try fields.append(v.data);
-                    if (v.scopeExited) break;
-                } else |err| if (try self.recoverExitsScope(err, &.{.Comma}, true))
-                    break,
-                .Embed => {
-                    self.consume();
-                    if (self.parseSelector()) |selector| {
-                        // TODO: Might need to keep the field index just so that the position is clear.
-                        try embeddedMessages.append(selector);
-                    } else |err| if (try self.recoverExitsScope(err, MessageBodyRecoveryPoints, false)) break;
-                },
-                .OneOf => {
-                    const start = token.position;
-                    self.consume();
-                    const oneOfNameToken = self.consumeRequiredToken(.Identifier, "oneof group name") catch |err|
-                        if (try self.recoverExitsScope(err, MessageBodyRecoveryPoints, false)) break else continue;
-                    if (self.processOneOfBody(@intCast(oneOfGroups.len()), &fields)) |v| {
-                        try oneOfGroups.append(ast.OneOf{
-                            .name = ast.Identifier{
-                                .value = try self.copyString(oneOfNameToken.literal),
-                                .range = nameToken.range(),
-                            },
-                            .annotations = v.data.options,
-                            .range = ast.Range{
-                                .start = start,
-                                .endOffset = self.it.currentAssumeSafe().endOffset(),
-                            },
-                        });
-                    } else |err| if (try self.recoverExitsScope(err, MessageBodyRecoveryPoints, false)) break;
-                },
-                .RightCurlyBrace => {
-                    self.consume();
-                    self.popScopeDelimiter(.CurlyBrace);
-                    break;
-                },
-                else => {
-                    self.addError(SyntaxError.unexpectedToken(&token));
-                    if (try self.skipTokensUntil(MessageBodyRecoveryPoints, false)) {
-                        break;
-                    }
-                },
-            }
-            _ = self.consumeOptionalTokenBool(.Comma);
-        }
-
-        try self.messages.append(self.allocator, ast.Struct{
-            .name = ast.Identifier{
-                .value = try self.copyString(nameToken.literal),
-                .range = nameToken.range(),
-            },
-            .embedded_structs = try embeddedMessages.toOwnedSlice(self.allocator),
-            .documentation = documentation,
-            .fields = try fields.toOwnedSlice(self.allocator),
-            .annotations = try options.toOwnedSlice(self.allocator),
-            .oneof_groups = try oneOfGroups.toOwnedSlice(self.allocator),
-            .range = .{ .start = nameToken.position, .endOffset = self.it.currentAssumeSafe().endOffset() },
-        });
-    }
-
-    inline fn buildField(
-        self: *Context,
-        nameToken: tokenizer.Token,
-        documentation: ?ast.Documentation,
-        options: []ast.OptionAssignmentNode,
-        nullable: bool,
-        tag: ?u16,
-        dataType: ast.Field.RangedDataType,
-        oneOfGroupIndex: ?u16,
-    ) Allocator.Error!ast.Field {
-        return ast.Field{
-            .name = .{
-                .value = try self.copyString(nameToken.literal),
-                .range = nameToken.range(),
-            },
-            .documentation = documentation,
-            .annotations = options,
-            .nullable = nullable,
-            .range = ast.Range{
-                .start = nameToken.position,
-                .endOffset = self.it.currentAssumeSafe().endOffset(),
-            },
-            .tag = tag,
-            .data_type = dataType,
-            .oneof_group_index = oneOfGroupIndex,
-        };
-    }
-
-    fn parseField(self: *Context, oneOfGroupIndex: ?u16) Error!ParseResult(ast.Field) {
-        const documentation = try self.consumeStagedDocumentationFor(self.it.currentAssumeSafe().position);
-        const nameToken = try self.consumeRequiredToken(.Identifier, "field name");
-        _ = try self.consumeRequiredToken(.Colon, ":");
-        const nullable = self.consumeOptionalTokenBool(.QuestionMark);
-
-        const dataType = try self.parseFieldDataType();
-        if (dataType.scopeExited) {
-            return .initScopeExited(
-                try self.buildField(nameToken, documentation, &.{}, nullable, null, dataType.data, oneOfGroupIndex),
-            );
-        }
-        var tag: ?u16 = null;
-        if (self.consumeOptionalTokenBool(.Equal)) {
-            if (self.consumeRequiredToken(.Integer, "field tag number")) |tagToken| {
-                if (std.math.cast(u16, tagToken.kind.Integer)) |tagValue| {
-                    if (tagValue == 0) {
-                        self.addError(SyntaxError.fieldTagNumericalError(&tagToken));
-                    }
-                    tag = tagValue;
-                } else self.addError(SyntaxError.fieldTagNumericalError(&tagToken));
-            } else |err| if (try self.recoverExitsScope(err, &.{ .Hash, .RawHash, .PrivateHash, .Comma }, true)) {
-                return .initScopeExited(
-                    try self.buildField(nameToken, documentation, &.{}, nullable, tag, dataType.data, oneOfGroupIndex),
-                );
-            }
-        }
-
-        return if (self.parseItemOptions(.Comma)) |v| .initValue(
-            try self.buildField(nameToken, documentation, v.data, nullable, tag, dataType.data, oneOfGroupIndex),
-            v.scopeExited,
-        ) else |err| .initValue(
-            try self.buildField(nameToken, documentation, &.{}, nullable, tag, dataType.data, oneOfGroupIndex),
-            try self.recoverExitsScope(err, MessageBodyRecoveryPoints, true),
-        );
-    }
-
-    fn parseFieldDataType(self: *Context) Error!ParseResult(ast.Field.RangedDataType) {
-        const nextToken = try self.peekNextOrError();
-        switch (nextToken.kind) {
-            .Identifier => {
-                const typeSelector = try self.parseSelector();
-                return .initOk(ast.Field.RangedDataType{
-                    .value = .{ .String = typeSelector },
-                    .range = typeSelector.range,
-                });
-            },
-            .OneOf => {
-                const start = nextToken.position;
-                self.consume();
-                const oneOfBody = try self.parseOneOfBodyType();
-                return .initValue(ast.Field.RangedDataType{
-                    .value = .{ .OneOf = oneOfBody.data },
-                    .range = ast.Range{
-                        .start = start,
-                        .endOffset = self.it.currentAssumeSafe().endOffset(),
-                    },
-                }, oneOfBody.scopeExited);
-            },
-            .List => {
-                const start = nextToken.position;
-                self.consume();
-                _ = try self.consumeRequiredToken(.LessThan, "<");
-                const typeSelector = try self.parseSelector();
-                const lastToken = try self.consumeRequiredToken(.GreaterThan, ">");
-                return .initOk(ast.Field.RangedDataType{
-                    .value = .{ .List = typeSelector },
-                    .range = ast.Range{ .start = start, .endOffset = lastToken.endOffset() },
-                });
-            },
-            .Map => {
-                const start = nextToken.position;
-                self.consume();
-                _ = try self.consumeRequiredToken(.LessThan, "<");
-                const keyTypeSelector = try self.parseSelector();
-                _ = try self.consumeRequiredToken(.Comma, ",");
-                const valueTypeSelector = try self.parseSelector();
-                const lastToken = try self.consumeRequiredToken(.GreaterThan, ">");
-                return .initOk(ast.Field.RangedDataType{
-                    .value = .{ .Map = .{ .key = keyTypeSelector, .value = valueTypeSelector } },
-                    .range = ast.Range{ .start = start, .endOffset = lastToken.endOffset() },
-                });
-            },
-            else => {
-                self.addError(SyntaxError.expectToken(&nextToken, "field type"));
-                self.consume();
-                return Error.UnexpectedToken;
-            },
-        }
-    }
-
-    fn processOneOfBody(
-        self: *Context,
-        oneOfGroupIndex: ?u16,
-        fields: *StackFallbackArray(ast.Field, 40),
-    ) Error!ParseResult(struct { options: []const ast.OptionAssignmentNode }) {
-        const OneOfBodyRecoveryPoints: []const TokenKindTag = &.{
-            .Hash,
-            .PrivateHash,
-            .RawHash,
-            .Comma,
-            .Identifier,
-        };
-        _ = try self.consumeRequiredToken(.LeftCurlyBrace, "{");
-        var options = StackFallbackArray(ast.OptionAssignmentNode, 20).init(self.transientAllocator);
-        const currentScope = self.scopeDelimiterContext();
-
-        const scopeExited = blk: {
-            while (true) {
-                const nextToken = self.it.peek(1) orelse break :blk false;
-                switch (nextToken.kind) {
-                    .Identifier => if (self.parseField(oneOfGroupIndex)) |v| {
-                        // append the field
-                        try fields.append(v.data);
-                        if (v.scopeExited) break :blk true;
-                    } else |err| if (try self.recoverExitsScope(err, &.{.Comma}, true))
-                        break :blk true,
-                    .Hash, .ExtraHash, .PrivateHash => if (self.parseOption(false, null)) |v| {
-                        try options.append(v.data);
-                        if (v.scopeExited) break :blk true;
-                    } else |err| if (try self.recoverExitsScope(err, OneOfBodyRecoveryPoints, true))
-                        break :blk true,
-                    .RightCurlyBrace => {
-                        self.consume();
-                        self.popScopeDelimiter(.CurlyBrace);
-                        break :blk false;
-                    },
-                    .Comma => self.consume(),
-                    else => {
-                        self.addError(SyntaxError.unexpectedToken(&nextToken));
-                        if (try self.skipTokensUntil(OneOfBodyRecoveryPoints, true))
-                            break :blk true;
-                    },
-                }
-                _ = self.consumeOptionalTokenBool(.Comma);
-            }
-        };
-
-        return .initValue(
-            .{ .options = try options.toOwnedSlice(self.allocator) },
-            scopeExited and self.scopeDelimiterContext() + 1 != currentScope,
-        );
-    }
-
-    /// parses oneof body that is a field type, not a grouping.
-    fn parseOneOfBodyType(
-        self: *Context,
-    ) Error!ParseResult(ast.Field.OneOfTypeInfo) {
-        var fields = StackFallbackArray(ast.Field, 40).init(self.transientAllocator);
-        return if (self.processOneOfBody(null, &fields)) |result| .initValue(.{
-            .fields = try fields.toOwnedSlice(self.allocator),
-            .options = result.data.options,
-        }, result.scopeExited) else |err| err;
-    }
-
-    fn parseItemOptions(
-        self: *Context,
-        comptime terminationToken: TokenKindTag,
-    ) Error!ParseResult([]ast.OptionAssignmentNode) {
-        const RecoveryPoints: []const TokenKindTag = &.{ terminationToken, .RawHash, .Hash, .PrivateHash };
-
-        if (self.nextTokenIs(.LeftCurlyBrace)) {
-            return self.parseOptionBlock();
-        }
-
-        var values = StackFallbackArray(ast.OptionAssignmentNode, 10).init(self.transientAllocator);
-        const scopeExited = blk: {
-            while (true) {
-                const token = self.it.peek(1) orelse break :blk false;
-                if (token.kind == .RightCurlyBrace or token.kind == terminationToken) {
-                    break :blk false;
-                }
-                if (self.parseOption(false, null)) |v| {
-                    try values.append(v.data);
-                    if (v.scopeExited) break :blk true;
-                } else |err| if (try self.recoverExitsScope(err, RecoveryPoints, true))
-                    break :blk true
-                else if (!self.nextTokenIsOneOf(RecoveryPoints)) break :blk false;
-                // NB: If next token is not an option token, exit out of option parsing loop.
-            }
-        };
-
-        return .initValue(try values.toOwnedSlice(self.allocator), scopeExited);
-    }
-
-    fn processOptionDefinition(self: *Context) Error!void {
-        const start = self.it.currentAssumeSafe().position;
-        _ = try self.consumeRequiredToken(.For, "for");
-
-        var targetSet = ast.AnnotationTargetSet.init(.{});
-        targetSet.insert(try self.parseOptionTarget());
-        while (true) {
-            const nextToken = try self.peekNextOrError();
-            if (nextToken.kind == .LeftCurlyBrace) {
-                self.consume();
-                break;
-            }
-            _ = try self.consumeRequiredToken(.Comma, ",");
-            targetSet.insert(try self.parseOptionTarget());
-        }
-
-        var fields = StackFallbackArray(ast.Field, 40).init(self.transientAllocator);
-
-        while (true) {
-            const nextToken = try self.peekNextOrError();
-            switch (nextToken.kind) {
-                .Comment, .Comma => self.consume(),
-                .RightCurlyBrace => {
-                    self.consume();
-                    break;
-                },
-                else => if (self.parseField(null)) |v| {
-                    try fields.append(v.data);
-                    if (v.scopeExited) break;
-                } else |err| if (try self.recoverExitsScope(err, &.{.Comma}, true))
-                    break,
-            }
-        }
-
-        try self.optionDefinitions.append(self.allocator, ast.AnnotationDefinition{
-            .targets = targetSet,
-            .fields = try fields.toOwnedSlice(self.allocator),
-            .range = .{
-                .start = start,
-                .endOffset = self.it.currentAssumeSafe().endOffset(),
-            },
-        });
-    }
-
-    inline fn parseOptionTarget(self: *Context) Error!ast.AnnotationTarget {
-        const targetToken = self.it.next() orelse {
-            self.addError(SyntaxError.unexpectedEOF());
-            return Error.UnexpectedEOF;
-        };
-        switch (targetToken.kind) {
-            .TargetPackage => return ast.AnnotationTarget.Package,
-            .TargetOneOf => return ast.AnnotationTarget.OneOf,
-            .TargetEnum => return ast.AnnotationTarget.Enum,
-            .TargetConst => return ast.AnnotationTarget.Constant,
-            .TargetEnumVariant => return ast.AnnotationTarget.EnumVariant,
-            .TargetStruct => return ast.AnnotationTarget.Struct,
-            .TargetField => return ast.AnnotationTarget.Field,
-            .TargetProtocol => return ast.AnnotationTarget.Protocol,
-            .TargetFunc => return ast.AnnotationTarget.Func,
-            else => {
-                self.addError(SyntaxError.expectToken(&targetToken, "option target"));
-                return Error.UnexpectedToken;
-            },
-        }
-    }
-
-    fn processInterface(self: *Context) Error!void {
-        try self.processGroup(processInterfaceBody);
-    }
-
-    fn processInterfaceBody(self: *Context) Error!void {
-        const InterfaceRecoveryPoints: []const TokenKindTag = &.{ .Interface, .Documentation };
-        const documentation = try self.parseDocumentationGroupForCurrentPosition();
-        const nameToken = self.consumeRequiredToken(.Identifier, "interface name") catch |err|
-            return self.recover(err, InterfaceRecoveryPoints, true);
-
-        _ = self.consumeRequiredToken(.LeftCurlyBrace, "") catch |err|
-            return self.recover(err, InterfaceRecoveryPoints, false);
-
-        var funcs = StackFallbackArray(ast.Func, 40).init(self.transientAllocator);
-        var options = StackFallbackArray(ast.OptionAssignmentNode, 20).init(self.transientAllocator);
-
-        while (true) {
-            const token = try self.peekNextOrError();
-            switch (token.kind) {
-                .Semicolon, .Comma, .Comment => self.consume(),
-                .Hash, .PrivateHash, .ExtraHash => if (self.parseOption(false, null)) |v| {
-                    try options.append(v.data);
-                    if (v.scopeExited) break;
-                } else |err| if (try self.recoverExitsScope(err, InterfaceBodyRecoveryPoints, true))
-                    break,
-                .Documentation => try self.captureDocumentationGroup(),
-                .Identifier => if (self.parseFunc()) |v| {
-                    try funcs.append(v.data);
-                    if (v.scopeExited) break;
-                } else |err| if (try self.recoverExitsScope(err, &.{.Semicolon}, true))
-                    break,
-                .RightCurlyBrace => {
-                    self.consume();
-                    self.popScopeDelimiter(.CurlyBrace);
-                    break;
-                },
-                else => {
-                    self.addError(SyntaxError.unexpectedToken(&token));
-                    if (try self.skipTokensUntil(InterfaceBodyRecoveryPoints, false)) {
-                        break;
-                    }
-                },
-            }
-        }
-
-        try self.interfaces.append(self.allocator, ast.Protocol{
-            .name = ast.Identifier{
-                .value = try self.copyString(nameToken.literal),
-                .range = nameToken.range(),
-            },
-            .funcs = try funcs.toOwnedSlice(self.allocator),
-            .documentation = documentation,
-            .annotations = try options.toOwnedSlice(self.allocator),
-            .range = ast.Range{
-                .start = nameToken.position,
-                .endOffset = self.it.currentAssumeSafe().endOffset(),
-            },
-        });
-    }
-
-    inline fn buildFunc(
-        self: *Context,
-        nameToken: tokenizer.Token,
-        options: []ast.OptionAssignmentNode,
-        input: ?ast.FuncArg,
-        output: ?ast.FuncArg,
-        documentation: ?ast.Documentation,
-        tag: ?u16,
-    ) Allocator.Error!ast.Func {
-        return ast.Func{
-            .name = ast.Identifier{
-                .value = try self.copyString(nameToken.literal),
-                .range = nameToken.range(),
-            },
-            .annotations = options,
-            .input = input,
-            .output = output,
-            .documentation = documentation,
-            .tag = tag,
-            .range = .{
-                .start = nameToken.position,
-                .endOffset = self.it.currentAssumeSafe().endOffset(),
-            },
-        };
-    }
-
-    fn parseFunc(self: *Context) Error!ParseResult(ast.Func) {
-        const documentation = try self.consumeStagedDocumentationFor(self.it.currentAssumeSafe().position);
-        const nameToken = try self.consumeRequiredToken(.Identifier, "func name");
-        _ = try self.consumeRequiredToken(.LeftParan, "(");
-        var input: ?ast.FuncArg = null;
-        var output: ?ast.FuncArg = null;
-
-        // Input
-        if (!self.consumeOptionalExitScopeTokenBool(.RightParan)) {
-            input = try self.parseFuncArg();
-            _ = try self.consumeRequiredToken(.RightParan, ")");
-        }
-
-        // Output
-        if (self.consumeOptionalTokenBool(.Return)) {
-            if (try self.consumeOptionalEnterScopeTokenBool(.LeftParan)) {
-                if (self.nextTokenIs(.Identifier)) {
-                    output = try self.parseFuncArg();
-                }
-                _ = try self.consumeRequiredToken(.RightParan, ")");
-            } else {
-                output = try self.parseFuncArg();
-            }
-        }
-
-        // Optional Tag
-        var tag: ?u16 = null;
-        if (self.consumeOptionalTokenBool(.Equal)) {
-            const tagToken = try self.consumeRequiredToken(.Integer, "func tag");
-            if (std.math.cast(u16, tagToken.kind.Integer)) |tagValue| {
-                if (tagValue == 0) {
-                    self.addError(SyntaxError.funcTagNumericalError(&tagToken));
-                }
-                tag = tagValue;
-            } else self.addError(SyntaxError.funcTagNumericalError(&tagToken));
-        }
-
-        return if (self.parseItemOptions(.Semicolon)) |v| .initValue(
-            try self.buildFunc(nameToken, v.data, input, output, documentation, tag),
-            v.scopeExited,
-        ) else |err| .initValue(
-            try self.buildFunc(nameToken, &.{}, input, output, documentation, tag),
-            try self.recoverExitsScope(err, InterfaceBodyRecoveryPoints, true),
-        );
-    }
-
-    fn parseFuncArg(self: *Context) Error!ast.FuncArg {
-        const streaming = self.consumeOptionalTokenBool(.Stream);
-        const name = try self.parseSelector();
-        return ast.FuncArg{
-            .name = name,
-            .streaming = streaming,
-        };
-    }
+    // inline fn buildFunc(
+    //     self: *Context,
+    //     nameToken: tokenizer.Token,
+    //     options: []ast.OptionAssignmentNode,
+    //     input: ?ast.FuncArg,
+    //     output: ?ast.FuncArg,
+    //     documentation: ?ast.Documentation,
+    //     tag: ?u16,
+    // ) Allocator.Error!ast.Func {
+    //     return ast.Func{
+    //         .name = ast.Identifier{
+    //             .value = try self.copyString(nameToken.literal),
+    //             .range = nameToken.range(),
+    //         },
+    //         .annotations = options,
+    //         .input = input,
+    //         .output = output,
+    //         .documentation = documentation,
+    //         .tag = tag,
+    //         .range = .{
+    //             .start = nameToken.position,
+    //             .endOffset = self.it.currentAssumeSafe().endOffset(),
+    //         },
+    //     };
+    // }
+    //
+    // fn parseFunc(self: *Context) Error!ParseResult(ast.Func) {
+    //     const documentation = try self.consumeStagedDocumentationFor(self.it.currentAssumeSafe().position);
+    //     const nameToken = try self.consumeRequiredToken(.Identifier, "func name");
+    //     _ = try self.consumeRequiredToken(.LeftParan, "(");
+    //     var input: ?ast.FuncArg = null;
+    //     var output: ?ast.FuncArg = null;
+    //
+    //     // Input
+    //     if (!self.consumeOptionalExitScopeTokenBool(.RightParan)) {
+    //         input = try self.parseFuncArg();
+    //         _ = try self.consumeRequiredToken(.RightParan, ")");
+    //     }
+    //
+    //     // Output
+    //     if (self.consumeOptionalTokenBool(.Return)) {
+    //         if (try self.consumeOptionalEnterScopeTokenBool(.LeftParan)) {
+    //             if (self.nextTokenIs(.Identifier)) {
+    //                 output = try self.parseFuncArg();
+    //             }
+    //             _ = try self.consumeRequiredToken(.RightParan, ")");
+    //         } else {
+    //             output = try self.parseFuncArg();
+    //         }
+    //     }
+    //
+    //     // Optional Tag
+    //     var tag: ?u16 = null;
+    //     if (self.consumeOptionalTokenBool(.Equal)) {
+    //         const tagToken = try self.consumeRequiredToken(.Integer, "func tag");
+    //         if (std.math.cast(u16, tagToken.kind.Integer)) |tagValue| {
+    //             if (tagValue == 0) {
+    //                 self.addError(PragmaError.funcTagNumericalError(&tagToken));
+    //             }
+    //             tag = tagValue;
+    //         } else self.addError(PragmaError.funcTagNumericalError(&tagToken));
+    //     }
+    //
+    //     return if (self.parseItemOptions(.Semicolon)) |v| .initValue(
+    //         try self.buildFunc(nameToken, v.data, input, output, documentation, tag),
+    //         v.scope_exited,
+    //     ) else |err| .initValue(
+    //         try self.buildFunc(nameToken, &.{}, input, output, documentation, tag),
+    //         try self.recoverExitsScope(err, InterfaceBodyRecoveryPoints),
+    //     );
+    // }
+    //
+    // fn parseFuncArg(self: *Context) Error!ast.FuncArg {
+    //     const streaming = self.consumeOptionalTokenBool(.Stream);
+    //     const name = try self.parseSelector();
+    //     return ast.FuncArg{
+    //         .name = name,
+    //         .streaming = streaming,
+    //     };
+    // }
 
     inline fn processGroup(self: *Context, comptime handler: fn (self: *Context) Error!void) Error!void {
         // NB: If there is no left paran '(', then it's not a group, just run the handler.
         if (!(try self.consumeOptionalEnterScopeTokenBool(.LeftParan))) {
             return handler(self);
+        }
+
+        // If there is any staged documentation, it is invalid and should be ignored.
+        if (!self.staged_documentation.empty()) {
+            self.addError(PragmaError.unusedDocumentation(self.staged_documentation.start));
+            self.staged_documentation.reset();
         }
 
         while (true) {
@@ -1064,7 +1021,7 @@ const Context = struct {
                             // outside of the paran scope; stop iterating.
                             0 => break,
                             // in the paran scope; skip the current line.
-                            1 => if (try self.skipTokensUntil(&.{}, true)) break,
+                            1 => if (try self.skipTokensUntil(&.{})) break,
                             // unlikely event, get out of the paran scope.
                             else => {
                                 try self.skipTokensUntilRootScope();
@@ -1078,157 +1035,157 @@ const Context = struct {
         }
     }
 
-    fn processOption(self: *Context) Error!void {
-        const modifiers = try self.parseOptionModifiers(true);
+    fn processAnnotation(self: *Context) Error!void {
+        const modifiers = try self.parseAnnotationModifiers(true);
 
         // NB: there is no need to check whether scope is exited or not because regardless
         // it returns to the root scope. If there is partial data, it should get added.
         if (self.nextTokenIs(.LeftCurlyBrace)) {
             // block mode.
-            const start = self.currentPosition();
-            const blockOptions = try self.parseOptionBlock();
-            const rootOption = ast.OptionAssignmentNode{
-                .private = modifiers.private,
-                .raw = modifiers.raw,
-                .selector = ast.Selector.init(&.{}, ast.Range.empty()),
-                .range = ast.Range{ .start = start, .endOffset = self.it.currentAssumeSafe().endOffset() },
-                .value = .{ .Group = blockOptions.data },
+            const start = self.currentRangeAssumeSafe().start;
+            const annotation_block = try self.parseAnnotationBlock();
+            const root = ast.AnnotationNode{
+                .flags = .{ .extra = modifiers.extra, .private = modifiers.private },
+                .key_path = ast.KeyPath.init("", .zero),
+                .profiles = modifiers.profiles,
+                .range = ast.Range{ .start = start, .end = self.currentRangeAssumeSafe().end },
+                .value = .{ .group = annotation_block.data },
             };
-            try self.options.append(self.allocator, rootOption);
+            try self.annotations.append(self.allocator, root);
         } else {
-            const option = try self.parseOption(false, modifiers);
-            try self.options.append(self.allocator, option.data);
+            const annotation = try self.parseAnnotation(false, modifiers);
+            try self.annotations.append(self.allocator, annotation.data);
         }
     }
 
-    fn parseOptionModifiers(self: *Context, comptime needsHashPrefix: bool) Error!OptionModifiers {
+    fn parseAnnotationModifiers(self: *Context, comptime needs_hash_prefix: bool) Error!AnnotationModifiers {
         const token = self.it.peek(1) orelse {
-            if (needsHashPrefix) {
-                self.addError(SyntaxError.unexpectedEOF());
+            if (needs_hash_prefix) {
+                self.addError(PragmaError.unexpectedEOF());
                 return Error.UnexpectedEOF;
             }
 
-            return .default();
+            return .default;
         };
 
         switch (token.kind) {
             .Hash => {
                 self.consume();
-                if (!needsHashPrefix) {
-                    self.addError(SyntaxError.redundantOptionHash(token.position));
+                if (!needs_hash_prefix) {
+                    self.addError(PragmaError.redundantAnnotationHash(token.range.start));
                 }
-                return .default();
+                return .default;
             },
             .ExtraHash => {
                 self.consume();
-                return .{ .raw = true, .private = false };
+                return .{ .extra = true };
             },
             .PrivateHash => {
                 self.consume();
-                return .{ .private = true, .raw = false };
+                return .{ .private = true };
             },
-            else => if (needsHashPrefix) {
-                self.addError(SyntaxError.expectToken(&token, "option setting modifier or end of statement"));
+            else => if (needs_hash_prefix) {
+                self.addError(PragmaError.expectToken(&token, "option setting modifier or end of statement"));
                 self.consume();
                 return Error.UnexpectedToken;
-            } else return .default(),
+            } else return .default,
         }
     }
 
-    fn parseOption(
+    fn parseAnnotation(
         self: *Context,
-        comptime blockMode: bool,
-        capturedModifiers: ?OptionModifiers,
-    ) Error!ParseResult(ast.OptionAssignmentNode) {
-        const modifiers = capturedModifiers orelse try self.parseOptionModifiers(!blockMode);
-        const start = self.currentPosition();
+        comptime inside_block: bool,
+        captured_modifiers: ?AnnotationModifiers,
+    ) Error!ParseResult(ast.AnnotationNode) {
+        const modifiers = captured_modifiers orelse try self.parseAnnotationModifiers(!inside_block);
+        const start = self.currentRangeAssumeSafe().start;
 
         // Parse the key.
-        const keyToken = try self.peekNextOrError();
-        const selector = switch (keyToken.kind) {
+        const key_token = try self.peekNextOrError();
+        const keypath = switch (key_token.kind) {
             .String => blk: {
-                if (!modifiers.raw) {
-                    self.addError(SyntaxError.rawStringOptionWithoutRawMarker(&keyToken));
+                if (!modifiers.extra) {
+                    self.addError(PragmaError.extraAnnotationWithoutSigil(&key_token));
                 }
                 self.consume();
-                break :blk ast.Selector.init(
-                    try keyToken.kind.String.toOwnedAndEscaped(self.allocator),
-                    keyToken.range(),
+                break :blk ast.KeyPath.init(
+                    try key_token.kind.String.toOwnedAndEscaped(self.allocator),
+                    key_token.range,
                 );
             },
-            .Identifier => try self.parseSelector(),
+            .Identifier => try self.parseKeyPath(),
             else => {
-                self.addError(SyntaxError.expectToken(&keyToken, "option identifier or key"));
+                self.addError(PragmaError.expectToken(&key_token, "option identifier or key"));
                 self.consume();
                 return Error.UnexpectedToken;
             },
         };
         // Parse the value, which can be a curly braces for blocks, a literal or nothing at all to indicate a flag.
-        if (self.it.peek(1)) |valueToken| switch (valueToken.kind) {
+        if (self.it.peek(1)) |value_token| switch (value_token.kind) {
             .LeftCurlyBrace => {
-                const currentScope = self.scopeDelimiterContext();
-                return if (self.parseOptionBlock()) |v| .initValue(
-                    .{
-                        .private = modifiers.private,
-                        .raw = modifiers.raw,
-                        .selector = selector,
-                        .value = .{ .Group = v.data },
+                const current_scope = self.scopeDelimiterContext();
+                return if (self.parseAnnotationBlock()) |v| .initValue(
+                    ast.AnnotationNode{
+                        .flags = .{ .private = modifiers.private, .extra = modifiers.extra },
+                        .key_path = keypath,
+                        .value = .{ .group = v.data },
                         .range = .{
                             .start = start,
-                            .endOffset = self.it.currentAssumeSafe().endOffset(),
+                            .end = self.currentRangeAssumeSafe().end,
                         },
+                        .profiles = modifiers.profiles,
                     },
-                    v.scopeExited and (self.scopeDelimiterContext() + 1 != currentScope),
+                    v.scope_exited and (self.scopeDelimiterContext() + 1 != current_scope),
                 ) else |err| err;
             },
             .Equal => {
                 self.consume();
-                const currentScope = self.scopeDelimiterContext();
+                const current_scope = self.scopeDelimiterContext();
                 return if (self.parseValue()) |v| .initValue(
-                    .{
-                        .private = modifiers.private,
-                        .raw = modifiers.raw,
-                        .selector = selector,
-                        .value = .{ .Leaf = v.data },
+                    ast.AnnotationNode{
+                        .flags = .{ .extra = modifiers.extra, .private = modifiers.private },
+                        .key_path = keypath,
+                        .value = .{ .leaf = v.data },
                         .range = .{
                             .start = start,
-                            .endOffset = v.data.range.endOffset,
+                            .end = v.data.range.end,
                         },
+                        .profiles = modifiers.profiles,
                     },
-                    v.scopeExited and (self.scopeDelimiterContext() != currentScope),
+                    v.scope_exited and (self.scopeDelimiterContext() != current_scope),
                 ) else |err| err;
             },
             else => {},
         };
 
-        const range = ast.Range{ .start = start, .endOffset = selector.range.endOffset };
-        return .initOk(.{
-            .private = modifiers.private,
-            .raw = modifiers.raw,
-            .selector = selector,
+        const range = ast.Range{ .start = start, .end = keypath.range.end };
+        return .initOk(ast.AnnotationNode{
+            .flags = .{ .extra = modifiers.extra, .private = modifiers.private },
+            .key_path = keypath,
             .value = .{
-                .Leaf = .{
-                    .value = .{ .Bool = true },
+                .leaf = .{
+                    .literal = .{ .boolean = true },
                     .range = range,
                 },
             },
             .range = range,
+            .profiles = modifiers.profiles,
         });
     }
 
-    fn parseOptionBlock(self: *Context) Error!ParseResult([]ast.OptionAssignmentNode) {
-        const OptionBlockRecoveryPoints: []const TokenKindTag = &.{
+    fn parseAnnotationBlock(self: *Context) Error!ParseResult([]ast.AnnotationNode) {
+        const AnnotationBlockRecoveryPoints: []const TokenKindTag = &.{
             .Comma,
             .Identifier,
             .String,
             .Hash,
-            .RawHash,
+            .ExtraHash,
             .PrivateHash,
         };
-        var values = StackFallbackArray(ast.OptionAssignmentNode, 20).init(self.transientAllocator);
+        var values = StackFallbackArray(ast.AnnotationNode, 16).init(self.transient_allocator);
         _ = try self.consumeRequiredToken(.LeftCurlyBrace, "{");
-        const currentScope = self.scopeDelimiterContext();
-        const scopeExited = blk: {
+        const current_scope = self.scopeDelimiterContext();
+        const scope_exited = blk: {
             while (true) {
                 const token = self.it.peek(1) orelse break :blk false;
                 switch (token.kind) {
@@ -1237,15 +1194,11 @@ const Context = struct {
                         self.popScopeDelimiter(.CurlyBrace);
                         break :blk false;
                     },
-                    .Comment => {
-                        self.consume();
-                        continue;
-                    },
-                    else => if (self.parseOption(true, null)) |v| {
+                    else => if (self.parseAnnotation(true, null)) |v| {
                         try values.append(v.data);
-                        if (v.scopeExited) break :blk true;
+                        if (v.scope_exited) break :blk true;
                     } else |err| {
-                        if (try self.recoverExitsScope(err, OptionBlockRecoveryPoints, true))
+                        if (try self.recoverExitsScope(err, AnnotationBlockRecoveryPoints))
                             break :blk true;
                     },
                 }
@@ -1255,14 +1208,14 @@ const Context = struct {
         };
         return .initValue(
             try values.toOwnedSlice(self.allocator),
-            scopeExited and (self.scopeDelimiterContext() + 1 != currentScope),
+            scope_exited and (self.scopeDelimiterContext() + 1 != current_scope),
         );
     }
 
     /// parses an array of ranged values.
     ///
     /// NOTE: It assumes the the left bracket is already consumed.
-    fn parseValueArray(self: *Context) Error!ParseResult(ast.RangedValue) {
+    fn parseValueArray(self: *Context) Error!ParseResult(ast.RangedLiteral) {
         const ArrayRecoveryPoints: []const TokenKindTag = &.{
             .String,
             .Integer,
@@ -1274,11 +1227,11 @@ const Context = struct {
             .Comma,
         };
         try self.pushScopeDelimiter(.Bracket);
-        var values = StackFallbackArray(ast.RangedValue, 20).init(self.transientAllocator);
-        const start = self.it.currentAssumeSafe().position;
-        const currentScope = self.scopeDelimiterContext();
+        var values = StackFallbackArray(ast.RangedLiteral, 16).init(self.transient_allocator);
+        const start = self.currentRangeAssumeSafe().start;
+        const current_scope = self.scopeDelimiterContext();
 
-        const scopeExited = blk: {
+        const scope_exited = blk: {
             while (true) {
                 const next = self.it.peek(1) orelse break :blk false;
                 switch (next.kind) {
@@ -1290,10 +1243,10 @@ const Context = struct {
                     .Comma => self.consume(),
                     else => if (self.parseValue()) |v| {
                         try values.append(v.data);
-                        if (v.scopeExited) {
+                        if (v.scope_exited) {
                             break :blk true;
                         }
-                    } else |err| if (try self.recoverExitsScope(err, ArrayRecoveryPoints, false)) {
+                    } else |err| if (try self.recoverExitsScope(err, ArrayRecoveryPoints)) {
                         break :blk true;
                     },
                 }
@@ -1303,22 +1256,22 @@ const Context = struct {
         };
 
         return .initValue(.{
-            .value = .{ .Array = try values.toOwnedSlice(self.allocator) },
-            .range = .{ .start = start, .endOffset = self.it.currentAssumeSafe().endOffset() },
-        }, scopeExited and (self.scopeDelimiterContext() + 1 != currentScope));
+            .literal = ast.LiteralValue{ .array = try values.toOwnedSlice(self.allocator) },
+            .range = .{ .start = start, .end = self.it.currentAssumeSafe().range.end },
+        }, scope_exited and (self.scopeDelimiterContext() + 1 != current_scope));
     }
 
     /// parses a map of ranged values.
     ///
     /// NOTE: It assumes the the left curly brace is already consumed.
-    fn parseValueObject(self: *Context) Error!ParseResult(ast.RangedValue) {
+    fn parseValueObject(self: *Context) Error!ParseResult(ast.RangedLiteral) {
         const ObjectRecoveryPoints: []const TokenKindTag = &.{ .String, .Identifier, .Comma };
         try self.pushScopeDelimiter(.CurlyBrace);
-        var values = StackFallbackArray(ast.Pair, 20).init(self.transientAllocator);
-        const start = self.it.currentAssumeSafe().position;
-        const currentScope = self.scopeDelimiterContext();
+        var values = StackFallbackArray(ast.Pair, 32).init(self.transient_allocator);
+        const start = self.currentRangeAssumeSafe().start;
+        const current_scope = self.scopeDelimiterContext();
 
-        const scopeExited = blk: {
+        const scope_exited = blk: {
             while (true) {
                 const next = self.it.next() orelse break :blk true;
                 switch (next.kind) {
@@ -1326,93 +1279,90 @@ const Context = struct {
                         self.popScopeDelimiter(.CurlyBrace);
                         break :blk false;
                     },
-                    .Comma, .Comment => {},
-                    .String, .Identifier => {
+                    .Comma => {},
+                    .String => {
                         _ = self.consumeRequiredToken(.Colon, ":") catch |err| {
-                            if (try self.recoverExitsScope(err, ObjectRecoveryPoints, false))
+                            if (try self.recoverExitsScope(err, ObjectRecoveryPoints))
                                 break :blk true;
                         };
                         if (self.parseValue()) |v| {
-                            try values.append(if (next.kind == .String)
-                                .{
-                                    .key = try next.kind.String.toOwnedAndEscaped(self.allocator),
-                                    .selector = false,
-                                    .value = v.data,
-                                }
-                            else
-                                .{ .key = try self.copyString(next.literal), .selector = true, .value = v.data });
-                            if (v.scopeExited) break :blk true;
-                        } else |err| if (try self.recoverExitsScope(err, ObjectRecoveryPoints, false))
+                            try values.append(ast.Pair{
+                                .key = .{ .string =  try next.kind.String.toOwnedAndEscaped(self.allocator) },
+                                .value = v.data,
+                            });
+                            if (v.scope_exited)
+                                break :blk true;
+                        } else |err| if (try self.recoverExitsScope(err, ObjectRecoveryPoints))
                             break :blk true;
                     },
                     else => {
-                        self.addError(SyntaxError.expectToken(&next, "key string literal"));
-                        break :blk try self.skipTokensUntil(ObjectRecoveryPoints, false);
+                        self.addError(PragmaError.expectToken(&next, "key string literal"));
+                        break :blk try self.skipTokensUntil(ObjectRecoveryPoints);
                     },
                 }
             }
         };
 
         return .initValue(.{
-            .value = .{ .Object = try values.toOwnedSlice(self.allocator) },
-            .range = .{ .start = start, .endOffset = self.it.currentAssumeSafe().endOffset() },
-        }, scopeExited and (self.scopeDelimiterContext() + 1 != currentScope));
+            .literal = ast.LiteralValue{ .object = try values.toOwnedSlice(self.allocator) },
+            .range = .{ .start = start, .end = self.currentRangeAssumeSafe().end },
+        }, scope_exited and (self.scopeDelimiterContext() + 1 != current_scope));
     }
 
-    fn parseValue(self: *Context) Error!ParseResult(ast.RangedValue) {
+    fn parseValue(self: *Context) Error!ParseResult(ast.RangedLiteral) {
         const token = self.it.next() orelse return Error.UnexpectedEOF;
         return switch (token.kind) {
             .String => .initOk(.{
-                .range = token.range(),
-                .value = .{ .String = try token.kind.String.toOwnedAndEscaped(self.allocator) },
+                .range = token.range,
+                .literal = ast.LiteralValue{ .string = try token.kind.String.toOwnedAndEscaped(self.allocator) },
             }),
             .Integer => .initOk(.{
-                .range = token.range(),
-                .value = .{ .Number = token.kind.Integer },
+                .range = token.range,
+                .literal = ast.LiteralValue{ .number = token.kind.Integer },
             }),
             .Float => .initOk(.{
-                .range = token.range(),
-                .value = .{ .Float = token.kind.Float },
+                .range = token.range,
+                .literal = ast.LiteralValue{ .float = token.kind.Float },
             }),
             .True => .initOk(.{
-                .range = token.range(),
-                .value = .{ .Bool = true },
+                .range = token.range,
+                .literal = ast.LiteralValue{ .boolean = true },
             }),
             .False => .initOk(.{
-                .range = token.range(),
-                .value = .{ .Bool = false },
+                .range = token.range,
+                .literal = ast.LiteralValue{ .boolean = false },
             }),
             .LeftBracket => self.parseValueArray(),
             .LeftCurlyBrace => self.parseValueObject(),
             else => {
-                self.addError(SyntaxError.expectToken(&token, "value"));
+                self.addError(PragmaError.expectToken(&token, "value"));
                 return Error.UnexpectedToken;
             },
         };
     }
 
-    fn parseSelector(self: *Context) Error!ast.Selector {
-        var dotCount: u16 = 0;
-        var contentSize: usize = 0;
-        var tokenCount: u16 = 0;
+    fn parseKeyPath(self: *Context) Error!ast.KeyPath {
+        var dot_count: u16 = 0;
+        var content_size: usize = 0;
+        var token_count: u16 = 0;
 
         const Segment = struct {
             content: []const u8,
-            position: ast.Position,
+            start: usize,
         };
 
-        var segments = StackArray(Segment, 20).init();
+        var segments = StackArray(Segment, 16).init();
 
         while (self.it.next()) |token| {
-            const expectIdentifier = tokenCount % 2 == 0;
+            const expect_identifier = token_count % 2 == 0;
             switch (token.kind) {
                 .Identifier => {
-                    if (expectIdentifier) {
-                        tokenCount += 1;
-                        contentSize += token.literal.len;
+                    if (expect_identifier) {
+                        token_count += 1;
+                        content_size += token.literal.len;
                         segments.append(.{
                             .content = token.literal,
-                            .position = token.position,
+                            .start = token.range.start,
                         }) catch return Error.NestingDepthReached;
                     } else {
                         self.it.goBack();
@@ -1420,17 +1370,17 @@ const Context = struct {
                     }
                 },
                 .Dot => {
-                    if (!expectIdentifier) {
-                        tokenCount += 1;
-                        contentSize += 1;
-                        dotCount += 1;
+                    if (!expect_identifier) {
+                        token_count += 1;
+                        content_size += 1;
+                        dot_count += 1;
                     } else {
-                        self.addError(SyntaxError.unexpectedToken(&token));
+                        self.addError(PragmaError.unexpectedToken(&token));
                         return Error.UnexpectedToken;
                     }
                 },
-                else => if (expectIdentifier) {
-                    self.addError(SyntaxError.expectToken(&token, "selector segment"));
+                else => if (expect_identifier) {
+                    self.addError(PragmaError.expectToken(&token, "keypath segment"));
                     return Error.UnexpectedToken;
                 } else {
                     self.it.goBack();
@@ -1438,145 +1388,100 @@ const Context = struct {
                 },
             }
         }
-        if (tokenCount % 2 == 0) {
+        if (token_count % 2 == 0) {
             // NB: Consume at least one token but go backwards if the unexpected token
             // comes after some other expected token.
-            if (tokenCount > 0) {
+            if (token_count > 0) {
                 self.it.goBack();
             }
             if (self.it.peek(0)) |token| {
-                self.addError(SyntaxError.unexpectedToken(&token));
+                self.addError(PragmaError.unexpectedToken(&token));
             } else {
-                self.addError(SyntaxError.unexpectedEOF());
+                self.addError(PragmaError.unexpectedEOF());
             }
             return Error.UnexpectedToken;
         }
 
-        if (dotCount == 0) {
+        if (dot_count == 0) {
             const segment = segments.buffer[0];
-            return ast.Selector.init(try self.copyString(segment.content), .{
-                .start = segment.position,
-                .endOffset = segment.position.offset + segment.content.len,
+            return ast.KeyPath.init(try self.copyString(segment.content), .{
+                .start = segment.start,
+                .end = segment.start + segment.content.len,
             });
         }
 
-        var builder = try ast.Selector.builder(self.allocator, contentSize, dotCount + 1);
-        var firstOne = true;
+        var builder = try ast.KeyPath.builder(self.allocator, content_size, dot_count + 1);
+        var first_one = true;
         for (segments.slice()) |segment| {
-            if (!firstOne) {
+            if (!first_one) {
                 builder.appendSeparator() catch @panic("poor calculation of token count");
-            } else firstOne = false;
-            builder.appendSegment(segment.content, segment.position) catch @panic("poor calculation of segment count");
+            } else first_one = false;
+            builder.appendSegment(segment.content, segment.start) catch @panic("poor calculation of segment count");
         }
 
-        const lastOne = segments.buffer[segments.len - 1];
+        const last_one = segments.buffer[segments.len - 1];
         return builder.build(.{
-            .start = segments.buffer[0].position,
-            .endOffset = lastOne.position.offset + lastOne.content.len,
+            .start = segments.buffer[0].start,
+            .end = last_one.start + last_one.content.len,
         });
     }
 
-    fn parseDocumentationGroup(self: *Context) Allocator.Error!?StagedDocumentation {
-        var doc: StagedDocumentation = .init(&self.sharedStagedDocumentationStore);
-        while (true) {
-            const nextToken = self.it.peek(1) orelse break;
-            switch (nextToken.kind) {
-                .Documentation => {
-                    if (nextToken.position.line > doc.lastDocLine + 1 and doc.lastDocLine != 0) {
-                        // documentations are too far apart.
-                        break;
-                    }
-
-                    if (doc.contentSize == 0) {
-                        doc.boundaries.clear(); // there is a documentation that needs capturing, clean the storage.
-                        doc.position = nextToken.position;
-                    }
-
-                    doc.lastDocLine = nextToken.position.line + nextToken.kind.Documentation.newline_count;
-                    const content = nextToken.kind.Documentation.content;
-                    doc.contentSize += content.len + 1; // NB: 1 for the new line!
-                    try doc.boundaries.append(content);
-                    self.consume();
-                },
-                .Comment => {
-                    // don't include the comment but don't break the doc group.
-                    doc.lastDocLine = nextToken.position.line;
-                    self.consume();
-                },
-                else => break,
-            }
-        }
-
-        return if (doc.contentSize > 0) doc else null;
-    }
-
-    fn captureDocumentationGroup(self: *Context) Allocator.Error!void {
-        if (try self.parseDocumentationGroup()) |doc| {
-            if (self.stagedDocumentation) |stagedDoc| {
-                self.addError(SyntaxError.looseDocumentation(stagedDoc));
+    /// read contiguous package documentations and add them to the document.
+    fn consumePackageDocumentation(self: *Context) Allocator.Error!void {
+        while (self.it.peek(1)) |token| {
+            const is_documentation = switch (token.kind) { .Documentation => true, else => false };
+            if (!is_documentation or !token.kind.Documentation.flags.package) {
+                break;
             }
 
-            self.stagedDocumentation = doc;
+            const content = token.kind.Documentation.content;
+            try self.staged_documentation.boundaries.append(content);
+            self.staged_documentation.content_size += content.len;
         }
-        return;
+
+        self.documentation = try self.consumeStagedDocumentation();
     }
 
-    fn consumeStagedDocumentationFor(self: *Context, position: ast.Position) Allocator.Error!?ast.Documentation {
-        if (self.stagedDocumentation) |stagedDoc| {
-            if (stagedDocumentationBelongsToLine(stagedDoc, position.line)) {
-                defer self.stagedDocumentation = null;
-                return try self.processStagedDocumentation(stagedDoc);
+    /// parse and stage documentation lines.
+    fn stageDocumentationGroup(self: *Context) Allocator.Error!void {
+        // TODO: Do we need to clear the previous staged documentation?
+        while (self.it.peek(1)) |token| {
+            if (token.kind != .Documentation)
+                break;
+
+            self.consume();
+
+            if (token.kind.Documentation.flags.package) {
+                if (self.staged_documentation.encountered_package_error)
+                    self.addError(.unexpectedDocumentationPackage(token.range.start));
+                
+                continue;
             }
+
+            const content = token.kind.Documentation.content;
+            if (self.staged_documentation.boundaries.stack_len == 0) {
+                self.staged_documentation.start = token.range.start;
+            }
+            try self.staged_documentation.boundaries.append(content);
+            self.staged_documentation.content_size += content.len;
         }
-        return null;
     }
 
-    fn parseDocumentationGroupForCurrentPosition(self: *Context) Allocator.Error!?ast.Documentation {
-        var token = self.it.peek(1) orelse return null;
-        if (try self.consumeStagedDocumentationFor(token.position)) |doc| {
-            return doc;
-        }
-
-        if (try self.parseDocumentationGroup()) |doc| {
-            token = self.it.peek(1) orelse return null;
-            if (stagedDocumentationBelongsToLine(doc, token.position.line)) {
-                return try self.processStagedDocumentation(doc);
-            } else self.addError(SyntaxError.looseDocumentation(doc));
-        }
-
-        return null;
-    }
-
-    fn processStagedDocumentation(self: *Context, stagedDoc: StagedDocumentation) Allocator.Error!ast.Documentation {
-        var contentBuffer = try std.ArrayList(u8).initCapacity(self.allocator, stagedDoc.contentSize);
-        var it = stagedDoc.boundaries.iterator();
+    fn consumeStagedDocumentation(self: *Context) Allocator.Error!?ast.Documentation {
+        if (self.staged_documentation.empty())
+            return null;
+        const content_size = self.staged_documentation.content_size + self.staged_documentation.boundaries.len() - 1;
+        var content_buffer = try std.ArrayList(u8).initCapacity(self.allocator, content_size);
+        var it = self.staged_documentation.boundaries.iterator();
+        content_buffer.appendSliceAssumeCapacity(it.next() orelse unreachable);
         while (it.next()) |boundary| {
-            contentBuffer.appendSliceAssumeCapacity(boundary);
-            contentBuffer.appendAssumeCapacity('\n');
+            content_buffer.appendAssumeCapacity('\n');
+            content_buffer.appendSliceAssumeCapacity(boundary);
         }
-        return ast.Documentation{ .content = contentBuffer.items };
+        return ast.Documentation{ .content = content_buffer.items };
     }
 
-    /// whether or not the next token is a top-level AST object captures documentation
-    /// such as a message, enum, interface or const.
-    fn nextTokenAcceptsTopLevelDocumentation(self: *const Context, stagedDoc: StagedDocumentation) bool {
-        const nextToken = self.it.peek(1) orelse return false;
-        switch (nextToken.kind) {
-            .Struct, .Enum, .Const, .Protocol => {
-                return stagedDocumentationBelongsToLine(stagedDoc, nextToken.position.line);
-            },
-            else => return false,
-        }
-    }
-
-    inline fn stagedDocumentationBelongsToLine(
-        stagedDoc: StagedDocumentation,
-        line: u16,
-    ) bool {
-        return stagedDoc.lastDocLine <= line and line <= stagedDoc.lastDocLine + 1;
-    }
-
-    fn addError(self: *Context, err: SyntaxError) void {
+    fn addError(self: *Context, err: PragmaError) void {
         if (self.errors.len == self.errors.capacity()) {
             return;
         }
@@ -1584,13 +1489,12 @@ const Context = struct {
     }
 
     /// allocates precisely the amount necessary to store errors.
-    fn buildErrors(self: Context) std.mem.Allocator.Error![]const SyntaxError {
-        const errors = try self.allocator.alloc(SyntaxError, self.errors.len + self.it.errors.len);
-        for (self.it.errors.slice(), 0..) |tokenError, i| {
-            errors[i] = SyntaxError{
-                .literal = tokenError.literal,
-                .message = tokenError.message,
-                .location = .{ .Position = tokenError.position },
+    fn buildErrors(self: Context) std.mem.Allocator.Error![]const PragmaError {
+        const errors = try self.allocator.alloc(PragmaError, self.errors.len + self.it.errors.len);
+        for (self.it.errors.slice(), 0..) |token_error, i| {
+            errors[i] = PragmaError{
+                .message = token_error.message,
+                .location = .{ .range = token_error.range },
             };
         }
         @memcpy(errors[self.it.errors.len..], self.errors.slice());
@@ -1612,14 +1516,14 @@ const Context = struct {
             }
             // error state
             if (expectedToken) |name| {
-                self.addError(SyntaxError.expectToken(&token, name));
+                self.addError(PragmaError.expectToken(&token, name));
             } else {
-                self.addError(SyntaxError.unexpectedToken(&token));
+                self.addError(PragmaError.unexpectedToken(&token));
             }
             if (token.kind == .EOF) return Error.UnexpectedEOF;
             return Error.UnexpectedToken;
         } else {
-            self.addError(SyntaxError.unexpectedEOF());
+            self.addError(PragmaError.unexpectedEOF());
             return Error.UnexpectedEOF;
         }
     }
@@ -1715,42 +1619,36 @@ const Context = struct {
 
     inline fn peekNextOrError(self: *Context) error{UnexpectedEOF}!tokenizer.Token {
         return self.it.peek(1) orelse {
-            self.addError(SyntaxError.unexpectedEOF());
+            self.addError(PragmaError.unexpectedEOF());
             return error.UnexpectedEOF;
         };
     }
 
-    inline fn copyString(self: Context, ref: []const u8) Allocator.Error![]const u8 {
-        const data = try self.allocator.alloc(u8, ref.len);
-        @memcpy(data, ref);
-        return data;
+    inline fn copyString(self: *Context, ref: []const u8) Allocator.Error![]const u8 {
+        return try self.allocator.dupe(u8, ref);
     }
 
-    inline fn currentPosition(self: Context) ast.Position {
-        const token = self.it.peek(1) orelse return ast.Position.empty(); // NB: not reachable.
-        return token.position;
+    inline fn currentRangeAssumeSafe(self: *const Context) ast.Range {
+        return self.it.currentAssumeSafe().range;
     }
 
     inline fn pushScopeDelimiter(self: *Context, delimiter: ScopeDelimiter) error{NestingDepthReached}!void {
-        self.scopeDelimiters.append(delimiter) catch return error.NestingDepthReached;
+        self.scope_delimiters.append(delimiter) catch return error.NestingDepthReached;
     }
 
-    inline fn scopeDelimiterContext(self: Context) usize {
-        return self.scopeDelimiters.len;
+    inline fn scopeDelimiterContext(self: *const Context) usize {
+        return self.scope_delimiters.len;
     }
 
     /// Search from the back (end) until the delimiter is found, all the iterated over delimiters get
     /// ignored.
     inline fn popScopeDelimiter(self: *Context, delimiter: ScopeDelimiter) void {
-        while (self.scopeDelimiters.pop()) |poppedDelimiter| {
-            if (poppedDelimiter == delimiter) break;
+        while (self.scope_delimiters.pop()) |popped_delimiter| {
+            if (popped_delimiter == delimiter) break;
         }
     }
 
     /// Skips tokens until encountering one of the specified token kinds. The matching token will NOT be consumed.
-    ///
-    /// Parameters:
-    ///   - If `untilEndOfLine` is true, only tokens in the current line are processed.
     ///
     /// Scope handling:
     ///   - The function respects scope boundaries - if the current scope ends before finding a matching token,
@@ -1762,50 +1660,35 @@ const Context = struct {
     fn skipTokensUntil(
         self: *Context,
         comptime kinds: []const TokenKindTag,
-        comptime untilEndOfLine: bool,
     ) error{NestingDepthReached}!bool {
-        var currentLine = (self.it.peek(0) orelse return false).position.line;
-        const currentScope = self.scopeDelimiterContext();
-        if (try self.handleScopeDelimiterRecovery(self.it.currentAssumeSafe().kind, currentScope)) {
+        const current_scope = self.scopeDelimiterContext();
+        if (try self.handleScopeDelimiterRecovery(self.it.currentAssumeSafe().kind, current_scope)) {
             self.consume();
             return true;
         }
         while (true) {
             const token = self.it.peek(1) orelse {
-                self.scopeDelimiters.clear();
-                return currentScope > 0;
+                self.scope_delimiters.clear();
+                return current_scope > 0;
             };
             if (token.kind == .EOF) {
-                self.scopeDelimiters.clear();
+                self.scope_delimiters.clear();
                 self.consume();
-                return currentScope > 0;
-            }
-            if (untilEndOfLine) {
-                // skipping the line is only applicable in the same scope.
-                if (token.position.line != currentLine and self.scopeDelimiterContext() == currentScope) {
-                    return false;
-                }
-            } else {
-                if (token.position.line >= currentLine + 2 and self.scopeDelimiterContext() == 0) {
-                    return false;
-                }
+                return current_scope > 0;
             }
 
-            if (try self.handleScopeDelimiterRecovery(token.kind, currentScope)) {
+            if (try self.handleScopeDelimiterRecovery(token.kind, current_scope)) {
                 self.consume();
                 return true;
             }
 
             // consider recovery tokens only if still in the same scope.
-            if (self.scopeDelimiterContext() == currentScope) {
+            if (self.scopeDelimiterContext() == current_scope) {
                 inline for (kinds) |kind| {
                     if (token.kind == kind) {
                         return false;
                     }
                 }
-            }
-            if (!untilEndOfLine) {
-                currentLine = token.position.line;
             }
             self.consume();
         }
@@ -1819,7 +1702,6 @@ const Context = struct {
         self: *Context,
         err: anytype,
         comptime tokens: []const TokenKindTag,
-        comptime untilEndOfLine: bool,
     ) !void {
         if (err != Error.UnexpectedToken) {
             return err;
@@ -1829,9 +1711,9 @@ const Context = struct {
         if (self.scopeDelimiterContext() > 0) {
             // NB: Inside a scope, go until you find next entry token or falling outside of the
             // current scope.
-            _ = try self.skipTokensUntil(tokens, untilEndOfLine);
+            _ = try self.skipTokensUntil(tokens);
         } else {
-            _ = try self.skipTokensUntil(EntryKeywords, untilEndOfLine);
+            _ = try self.skipTokensUntil(EntryKeywords);
         }
     }
 
@@ -1841,7 +1723,6 @@ const Context = struct {
         self: *Context,
         err: Error,
         comptime tokens: []const TokenKindTag,
-        comptime untilEndOfLine: bool,
     ) Error!bool {
         if (err != Error.UnexpectedToken) {
             return err;
@@ -1851,9 +1732,9 @@ const Context = struct {
         // NB: Inside a scope, go until you find next entry token or falling outside of the
         // current scope.
         return if (self.scopeDelimiterContext() > 0)
-            self.skipTokensUntil(tokens, untilEndOfLine)
+            self.skipTokensUntil(tokens)
         else
-            self.skipTokensUntil(EntryKeywords, untilEndOfLine);
+            self.skipTokensUntil(EntryKeywords);
     }
 
     /// similar to handleScopeDelimiter but specifically for comptime and enter tokens.
@@ -1916,7 +1797,7 @@ const ParseError = tokenizer.TokenizeError || Allocator.Error;
 pub const Result = struct {
     allocator: std.heap.ArenaAllocator,
     document: ast.Document,
-    errors: []const SyntaxError,
+    errors: []const PragmaError,
 
     pub fn deinit(self: *Result) void {
         self.allocator.deinit();
@@ -1928,35 +1809,34 @@ pub const Result = struct {
 };
 
 pub const Options = struct {
-    transientAllocator: ?std.mem.Allocator = null,
+    transient_allocator: ?std.mem.Allocator = null,
 };
 
 pub fn parse(allocator: Allocator, content: []const u8, opts: Options) ParseError!Result {
-    var resultAllocator = std.heap.ArenaAllocator.init(allocator);
-    errdefer resultAllocator.deinit();
+    var result_allocator = std.heap.ArenaAllocator.init(allocator);
+    errdefer result_allocator.deinit();
 
-    var transientAllocator = std.heap.ArenaAllocator.init(opts.transientAllocator orelse allocator);
-    defer transientAllocator.deinit();
+    var transient_allocator = std.heap.ArenaAllocator.init(opts.transient_allocator orelse allocator);
+    defer transient_allocator.deinit();
 
     var ctx = Context.init(
-        resultAllocator.allocator(),
-        transientAllocator.allocator(),
+        result_allocator.allocator(),
+        transient_allocator.allocator(),
         try tokenizer.tokenize(content),
     );
     try ctx.parse();
 
     return .{
-        .allocator = resultAllocator,
+        .allocator = result_allocator,
         .errors = try ctx.buildErrors(),
         .document = .{
-            .pact = ctx.pact,
             .imports = ctx.imports.items,
-            .annotations = ctx.options.items,
+            .annotations = ctx.annotations.items,
             .constants = ctx.constants.items,
             .enums = ctx.enums.items,
-            .structs = ctx.messages.items,
-            .annotation_definitions = ctx.optionDefinitions.items,
-            .protocols = ctx.interfaces.items,
+            .structs = ctx.structs.items,
+            .annotation_definitions = ctx.annotation_definitions.items,
+            .protocols = ctx.protocols.items,
             .documentation = ctx.documentation,
         },
     };
