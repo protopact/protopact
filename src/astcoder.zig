@@ -1,434 +1,500 @@
-const ast = @import("ast.zig");
 const std = @import("std");
 
-const NewlineFilterWriter = struct {
-    interface: std.Io.Writer,
-    writer: *std.Io.Writer,
-    lastLineWasNewLine: bool,
+const ast = @import("ast.zig");
+const LineMap = @import("LineMap.zig");
+
+pub const Options = struct {
+    line_map: ?LineMap = null,
+
+    expand_key_path: bool = false,
+    exclude_zero_values: bool = false,
+    include_range: bool = false,
+    include_import: bool = false,
+    include_annotations: bool = false,
+    include_constants: bool = false,
+    include_enums: bool = false,
+    include_structs: bool = false,
+    include_annotation_definitions: bool = false,
+    include_protocols: bool = false,
+    include_documentation: bool = false,
+};
+
+const YamlState = struct {
+    flag: u64 = 0,
 
     const Self = @This();
 
-    fn drain(w: *std.Io.Writer, data: []const []const u8, splat: usize) error{WriteFailed}!usize {
-        const self: *NewlineFilterWriter = @fieldParentPtr("interface", w);
+    const DepthMask: u64 = 0xff;
+    const InArrayMask: u64 = 0b1;
+    const IsNotFirstMask: u64 = 0b10;
+    const IsInlineMask: u64 = 0b100;
 
-        for (data[0 .. data.len - 1]) |slice| try self.process(slice);
+    pub const Mode = enum {
+        Array, InlineArray, Object
+    };
 
-        const pattern = data[data.len - 1];
-        for (0..splat) |_| try self.process(pattern);
-
-        return std.Io.Writer.countSplat(data, splat);
+    inline fn currentDepth(self: *const Self) u8 {
+        return @truncate(self.flag & DepthMask);
     }
 
-    fn process(self: *NewlineFilterWriter, data: []const u8) error{WriteFailed}!void {
-        for (data) |ch| {
-            if (ch == '\n' and self.lastLineWasNewLine)
-                continue;
-            try self.writer.writeByte(ch);
-            self.lastLineWasNewLine = ch == '\n';
+    inline fn inArray(self: *const Self) bool {
+        const bit_count: u6 = @intCast(8 + (self.currentDepth() * 3));
+        return (self.flag >> bit_count) & InArrayMask != 0;
+    }
+
+    inline fn isFirst(self: *const Self) bool {
+        const bit_count: u6 = @intCast(8 + (self.currentDepth() * 3));
+        return (self.flag >> bit_count) & IsNotFirstMask == 0;
+    }
+
+    inline fn isInline(self: *const Self) bool {
+        const bit_count: u6 = @intCast(8 + (self.currentDepth() * 3));
+        return (self.flag >> bit_count) & IsInlineMask != 0;
+    }
+
+    inline fn setFirst(self: *Self, comptime value: bool) void {
+        const bit_count: u6 = @intCast(8 + (self.currentDepth() * 3));
+        if (value) {
+            self.flag &= ~(IsNotFirstMask << bit_count);
+        } else {
+            self.flag |= (IsNotFirstMask << bit_count);
         }
     }
 
-    fn init(writer: *std.Io.Writer) Self {
-        return .{
-            .interface = .{
-                .buffer = &.{},
-                .vtable = &.{
-                    .drain = drain,
-                },
-            },
-            .writer = writer,
-            .lastLineWasNewLine = false,
-        };
+    inline fn setDepth(self: *Self, depth: u8) void {
+        self.flag = (self.flag & (~DepthMask)) | depth;
+    }
+
+    inline fn incDepth(self: *Self, comptime mode: Mode) void {
+        const current_depth = self.currentDepth() + 1;
+        self.setDepth(current_depth);
+        const bit_count: u6 = @intCast(8 + (current_depth * 3));
+        const zero_mask: u64 = ~(@as(u64, 0b111) << bit_count);
+        self.flag &= zero_mask;
+        switch (mode) {
+            .Array => self.flag |= InArrayMask << bit_count,
+            .InlineArray => self.flag |= (InArrayMask & IsInlineMask) << bit_count,
+            .Object => self.setFirst(false),
+        }
+    }
+
+    inline fn decDepth(self: *Self) void {
+        self.setDepth(self.currentDepth() - 1);
     }
 };
 
 const Context = struct {
     const LiteralNone = "null";
-    const Self = @This();
 
     writer: *std.Io.Writer,
-    indentation: usize = 0,
-    inArray: bool = false,
+    opts: Options,
+    state: YamlState,
 
-    // Config fields moved from YamlMarshaller
-    expandSelectors: bool,
-    includeRange: bool,
-    excludeZeroValues: bool,
-    includePact: bool,
-    includeImport: bool,
-    includeOptionAssignments: bool,
-    includeConstants: bool,
-    includeEnums: bool,
-    includeMessages: bool,
-    includeOptionDefinitions: bool,
-    includeInterfaces: bool,
-    includeDocumentation: bool,
-
-    inline fn incrIndent(self: *Self) void {
-        self.indentation += 2;
-    }
-
-    inline fn decrIndent(self: *Self) void {
-        self.indentation -= 2;
-    }
-
-    fn writeArrayPrefix(self: *Self) !void {
-        try self.writeNewLine();
-        _ = try self.writer.writeSplat(&.{" "}, self.indentation);
-        try self.writer.writeAll("- ");
-        self.inArray = true;
-    }
-
-    fn writeNewLine(self: *Self) !void {
-        try self.writer.writeByte('\n');
-    }
-
-    fn writeKey(self: *Self, key: []const u8) !void {
-        if (self.inArray) {
-            self.inArray = false;
+    fn writeKey(self: *Context, key: []const u8) !void {
+        if (self.state.isFirst()) {
+            self.state.setFirst(false);
         } else {
-            try self.writeNewLine();
-            _ = try self.writer.writeSplat(&.{" "}, self.indentation);
+            try self.writePrefixForDepth();
         }
         try self.writer.print("{s}:", .{key});
     }
 
-    fn writePact(self: *Self, selector: ?ast.Selector) !void {
-        if (!self.includePact or (self.excludeZeroValues and selector == null)) {
-            return;
-        }
-
-        try self.writer.writeAll("pact:");
-        if (selector) |value| {
-            try self.writeSelector(value);
-        } else {
-            try self.writer.writeAll(LiteralNone);
-        }
-        try self.writeNewLine();
-    }
-
-    fn writeRange(self: *Self, range: ast.Range) !void {
-        try self.writer.print(" \"{d}:{d}[{d}-{d}]\"", .{
-            range.start.line,
-            range.start.column,
-            range.start.offset,
-            range.endOffset,
-        });
-    }
-
-    fn writePosition(self: *Self, position: *const ast.Position) !void {
-        try self.writer.print(" \"{d}:{d}\"", .{
-            position.line,
-            position.column,
-        });
-    }
-
-    fn writeOptions(
-        self: *Self,
-        options: []const ast.OptionAssignmentNode,
-        includeKey: bool,
-    ) std.Io.Writer.Error!void {
-        if (!self.includeOptionAssignments or (self.excludeZeroValues and options.len == 0)) {
-            return;
-        }
-
-        if (includeKey) {
-            try self.writer.writeAll("options:");
-        }
-        self.incrIndent();
-        defer self.decrIndent();
-        for (options) |option| {
-            try self.writeKey("- raw");
-            try self.writer.print(" {any}", .{option.raw});
-            self.incrIndent();
-            defer self.decrIndent();
-            try self.writeKey("private");
-            try self.writer.print(" {any}", .{option.private});
-            if (self.includeRange) {
-                try self.writeKey("range");
-                try self.writeRange(option.range);
+    fn writeValue(self: *Context, comptime pattern: []const u8, args: anytype) !void {
+        if (self.state.inArray()) {
+            if (self.state.isInline()) {
+                if (self.state.isFirst()) {
+                    self.state.setFirst(false);
+                } else try self.writer.print(", " ++ pattern, args);
+            } else {
+                try self.writePrefixForDepth();
+                try self.writer.print("- " ++ pattern, args);
             }
-            try self.writeKey("selector");
-            try self.writeSelector(option.selector);
-            try self.writeOptionValue(&option.value);
+        } else {
+            try self.writer.print(" " ++ pattern, args);
         }
-        try self.writeNewLine();
     }
 
-    fn writeValue(self: *Self, value: *const ast.RangedValue) !void {
-        if (self.includeRange) {
-            self.incrIndent();
-            defer self.decrIndent();
+    fn writeQuotedValue(self: *Context, comptime pattern: []const u8, args: anytype) !void {
+        try self.writeValue("\"" ++ pattern ++ "\"", args);
+    }
+
+    fn writePrefixForDepth(self: *Context) !void {
+        try self.writer.writeByte('\n');
+        _ = try self.writer.writeSplat(&.{" "}, self.state.currentDepth()*2);
+    }
+
+    fn startArray(self: *Context) !void {
+        const in_array = self.state.inArray();
+        self.state.incDepth(.Array);
+        if (in_array) {
+            _ = try self.writer.write(":");
+        }
+    }
+
+    fn startInlineArray(self: *Context) !void {
+        self.state.incDepth(.InlineArray);
+        try self.writeValue("[", .{});
+    }
+
+    fn endInlineArray(self: *Context) !void {
+        self.state.decDepth();
+        try self.writeValue("[", .{});
+    }
+
+    fn endArray(self: *Context) void {
+        self.state.decDepth();
+    }
+
+    fn startObject(self: *Context) !void {
+        const starts_in_array = self.state.inArray();
+        if (starts_in_array) try self.writePrefixForDepth();
+        self.state.incDepth(.Object);
+        if (starts_in_array) {
+            _ = try self.writer.write("- ");
+            self.state.setFirst(true);
+        }
+    }
+
+    fn endObject(self: *Context) void {
+        self.state.decDepth();
+    }
+
+    fn writeRange(self: *Context, range: ast.Range) !void {
+        if (self.opts.line_map) |map| {
+            const start: LineMap.Position = map.resolveOffset(range.start) catch .zero;
+            const end: LineMap.Position = map.resolveOffset(range.end) catch .zero;
+            if (end.line != start.line) {
+                try self.writeQuotedValue("{d}:{d}-{d}:{d}[{d}-{d}]", .{
+                    start.line + 1,
+                    start.column + 1,
+                    end.line + 1,
+                    end.column + 1,
+                    range.start,
+                    range.end,
+                });
+            } else {
+                try self.writeQuotedValue("{d}:{d}-{d}[{d}-{d}]", .{
+                    start.line + 1,
+                    start.column + 1,
+                    end.column + 1,
+                    range.start,
+                    range.end,
+                });
+            }
+        } else try self.writeQuotedValue("{d}-{d}", .{range.start, range.end});
+    }
+
+    fn writePosition(self: *Context, offset: usize) !void {
+        if (self.opts.line_map) |map| {
+            const position: LineMap.Position = map.resolveOffset(offset) catch {
+                return try self.writeValue("<invalid offset:{}>", .{offset});
+            };
+            try self.writeQuotedValue("{d}:{d}", .{
+                position.line + 1,
+                position.column + 1,
+            });
+        } else try self.writeQuotedValue("{d}", .{offset});
+    }
+
+    fn writeAnnotations(
+        self: *Context,
+        annotations: []const ast.AnnotationNode,
+        include_key: bool,
+    ) std.Io.Writer.Error!void {
+        if (!self.opts.include_annotations or (self.opts.exclude_zero_values and annotations.len == 0)) {
+            return;
+        }
+
+        if (include_key) {
+            try self.writeKey("annotations");
+        }
+        try self.startArray();
+        defer self.endArray();
+        for (annotations) |annotation| {
+            try self.startObject();
+            defer self.endObject();
+
+            try self.writeKey("extra");
+            try self.writeValue("{any}", .{annotation.flags.extra});
+
+            try self.writeKey("private");
+            try self.writeValue("{any}", .{annotation.flags.private});
+
+            if (self.opts.include_range) {
+                try self.writeKey("range");
+                try self.writeRange(annotation.range);
+            }
+            try self.writeKey("key_path");
+            try self.writeKeyPath(annotation.key_path);
+            try self.writeAnnotationValue(&annotation.value);
+        }
+    }
+
+    fn writeRangedLiteral(self: *Context, value: *const ast.RangedLiteral) !void {
+        if (self.opts.include_range) {
+            try self.startObject();
             try self.writeKey("range");
-            try self.writeRange(value.*.range);
+            try self.writeRange(value.range);
             try self.writeKey("data");
         }
+        defer if (self.opts.include_range) self.endObject();
 
-        if (!self.inArray) {
-            switch (value.*.value) {
-                .Bool, .String, .Number, .Float, .None => try self.writer.writeAll(" "),
-                else => {},
-            }
-        }
+        switch (value.literal) {
+            .boolean => try self.writeValue("{any}", .{value.literal.boolean}),
+            .string => try self.writeQuotedValue("{s}", .{value.literal.string}),
+            .number => try self.writeValue("{d}", .{value.literal.number}),
+            .float => try self.writeValue("{d}", .{value.literal.float}),
+            .none => try self.writeValue("{s}", .{LiteralNone}),
+            .array => {
+                try self.startArray();
+                defer self.endArray();
 
-        switch (value.*.value) {
-            .Bool => try self.writer.print("{any}", .{value.*.value.Bool}),
-            .String => try self.writer.print("\"{s}\"", .{value.*.value.String}),
-            .Number => try self.writer.print("{d}", .{value.*.value.Number}),
-            .Float => try self.writer.print("{d}", .{value.*.value.Float}),
-            .None => try self.writer.writeAll(LiteralNone),
-            .Array => {
-                self.incrIndent();
-                defer self.decrIndent();
-                for (value.*.value.Array) |item| {
-                    if (self.includeRange) self.incrIndent();
-                    defer if (self.includeRange) self.decrIndent();
-                    try self.writeNewLine();
-                    _ = try self.writer.writeSplat(&.{" "}, self.indentation);
-                    try self.writer.writeAll("- ");
-                    self.inArray = true;
-                    try self.writeValue(&item);
-                    self.inArray = false;
+                for (value.literal.array) |*item| {
+                    try self.writeRangedLiteral(item);
                 }
             },
-            .Object => {
-                if (self.includeRange) self.incrIndent();
-                defer if (self.includeRange) self.decrIndent();
-                for (value.*.value.Object) |item| {
-                    self.incrIndent();
-                    defer self.decrIndent();
+            .object => {
+                for (value.literal.object) |item| {
+                    try self.startObject();
+                    defer self.endObject();
+
                     try self.writeKey("key");
-                    if (item.selector)
-                        try self.writer.print(" {s}", .{item.key})
-                    else
-                        try self.writer.print(" \"{s}\"", .{item.key});
+                    try self.writeQuotedValue("{s}", .{item.key.string});
                     try self.writeKey("value");
-                    try self.writeValue(&item.value);
-                    self.inArray = false;
+                    try self.writeRangedLiteral(&item.value);
                 }
             },
+            .ref => {},
         }
     }
 
-    fn writeOptionValue(
-        self: *Self,
-        value: *const ast.OptionAssignmentNode.Value,
+    fn writeAnnotationValue(
+        self: *Context,
+        value: *const ast.AnnotationNode.Value,
     ) !void {
         switch (value.*) {
-            .Leaf => {
+            .leaf => {
                 try self.writeKey("value");
-                try self.writeValue(&value.*.Leaf);
+                try self.writeRangedLiteral(&value.leaf);
             },
-            .Group => {
+            .group => {
                 try self.writeKey("block");
-                try self.writeOptions(value.*.Group, false);
+                try self.writeAnnotations(value.group, false);
             },
         }
     }
 
-    fn writeImports(self: *Self, imports: []const ast.Import) !void {
-        if (!self.includeImport or (self.excludeZeroValues and imports.len == 0)) {
+    fn writeImports(self: *Context, imports: []const ast.Import) !void {
+        if (!self.opts.include_import or (self.opts.exclude_zero_values and imports.len == 0)) {
             return;
         }
 
-        try self.writer.writeAll("imports:");
-        self.incrIndent();
-        defer self.decrIndent();
+        try self.writeKey("imports");
+        try self.startArray();
+        defer self.endArray();
+
         for (imports) |import| {
-            try self.writeKey("- alias");
-            try self.writer.print(" \"{s}\"", .{import.alias});
-            self.incrIndent();
-            defer self.decrIndent();
-            try self.writeKey("implicit");
-            try self.writer.print(" {any}", .{import.bare});
+            try self.startObject();
+            defer self.endObject();
+
+            if (!self.opts.exclude_zero_values or import.alias.len > 0) {
+                try self.writeKey("alias");
+                try self.writeQuotedValue("{s}", .{import.alias});
+            }
+
+            try self.writeKey("bare");
+            try self.writeValue("{any}", .{import.bare});
             try self.writeKey("path");
-            try self.writer.print(" \"{s}\"", .{import.path});
-            if (self.includeRange) {
+            try self.writeQuotedValue("{s}", .{import.path});
+            if (self.opts.include_range) {
                 try self.writeKey("range");
                 try self.writeRange(import.range);
             }
         }
-        try self.writeNewLine();
     }
 
-    fn writeSelector(self: *Self, selector: ast.Selector) !void {
-        if (!self.includeRange and !self.expandSelectors) {
-            try self.writer.print(" \"{s}\"", .{selector.content});
+    fn writeKeyPath(self: *Context, key_path: ast.KeyPath) !void {
+        if (!self.opts.include_range and !self.opts.expand_key_path) {
+            try self.writeQuotedValue("{s}", .{key_path.content});
             return;
         }
 
-        self.incrIndent();
-        defer self.decrIndent();
+        try self.startObject();
+        defer self.endObject();
+
         try self.writeKey("content");
-        try self.writer.print(" \"{s}\"", .{selector.content});
-        if (self.includeRange) {
+        try self.writeQuotedValue("{s}", .{key_path.content});
+        if (self.opts.include_range) {
             try self.writeKey("range");
-            try self.writeRange(selector.range);
+            try self.writeRange(key_path.range);
         }
-        if (self.expandSelectors) {
+        if (self.opts.expand_key_path) {
             try self.writeKey("segments");
-            self.incrIndent();
-            defer self.decrIndent();
-            var it = selector.iterator();
+            try self.startArray();
+            defer self.endArray();
+
+            var it = key_path.iterator();
             while (it.next()) |segment| {
-                try self.writeKey("- content");
-                try self.writer.print(" \"{s}\"", .{segment.content});
-                if (self.includeRange) {
-                    self.incrIndent();
-                    defer self.decrIndent();
+                try self.writeKey("content");
+                try self.writeQuotedValue("{s}", .{segment.content});
+                if (self.opts.include_range) {
+                    try self.startObject();
+                    defer self.endObject();
                     try self.writeKey("position");
-                    try self.writePosition(segment.position);
+                    try self.writePosition(segment.range.start);
                 }
             }
         }
     }
 
-    fn writeConstants(self: *Self, constants: []const ast.Constant) !void {
-        if (!self.includeConstants or (self.excludeZeroValues and constants.len == 0)) {
+    fn writeConstants(self: *Context, constants: []const ast.Constant) !void {
+        if (!self.opts.include_constants or (self.opts.exclude_zero_values and constants.len == 0)) {
             return;
         }
 
-        try self.writer.writeAll("constants:");
-        self.incrIndent();
-        defer self.decrIndent();
+        try self.writeKey("constants");
+        try self.startArray();
+        defer self.endArray();
         for (constants) |constant| {
-            try self.writeArrayPrefix();
+            try self.startObject();
+            defer self.endObject();
+
             try self.writeKey("name");
-            try self.writer.print(" \"{s}\"", .{constant.name});
-            self.incrIndent();
-            defer self.decrIndent();
+            try self.writeQuotedValue("{s}", .{constant.name.value});
 
             try self.writeDocumentation(constant.documentation);
 
-            if (self.includeRange) {
+            if (self.opts.include_range) {
                 try self.writeKey("range");
                 try self.writeRange(constant.range);
             }
 
             try self.writeKey("value");
-            try self.writeValue(&constant.value);
+            try self.writeRangedLiteral(&constant.value);
 
-            if (constant.annotations.len > 0 or !self.excludeZeroValues) {
-                try self.writeKey("options");
-                try self.writeOptions(constant.annotations, false);
+            if (constant.annotations.len > 0 or !self.opts.exclude_zero_values) {
+                try self.writeKey("annotations");
+                try self.writeAnnotations(constant.annotations, false);
             }
         }
-        try self.writeNewLine();
     }
 
-    fn writeEnumVariant(self: *Self, variant: ast.EnumVariant) !void {
-        try self.writeKey("- name");
-        try self.writer.print(" \"{s}\"", .{variant.name.value});
-        self.incrIndent();
-        defer self.decrIndent();
+    fn writeEnumVariant(self: *Context, variant: ast.EnumVariant) !void {
+        try self.startObject();
+        defer self.endObject();
+
+        try self.writeKey("name");
+        try self.writeQuotedValue("{s}", .{variant.name.value});
 
         try self.writeDocumentation(variant.documentation);
 
-        if (self.includeRange) {
+        if (self.opts.include_range) {
             try self.writeKey("range");
             try self.writeRange(variant.range);
         }
 
         if (variant.value) |value| {
             try self.writeKey("value");
-            try self.writer.print(" {d}", .{value});
-        } else if (!self.excludeZeroValues) {
+            try self.writeValue("{d}", .{value});
+        } else if (!self.opts.exclude_zero_values) {
             try self.writeKey("value");
-            try self.writer.writeAll(" ");
-            try self.writer.writeAll(LiteralNone);
+            try self.writeValue(LiteralNone, .{});
         }
 
-        if (variant.annotations.len > 0 or !self.excludeZeroValues) {
-            try self.writeKey("options");
-            try self.writeOptions(variant.annotations, false);
+        if (variant.annotations.len > 0 or !self.opts.exclude_zero_values) {
+            try self.writeKey("annotations");
+            try self.writeAnnotations(variant.annotations, false);
         }
     }
 
-    fn writeEnums(self: *Self, enums: []const ast.Enum) !void {
-        if (!self.includeEnums or (self.excludeZeroValues and enums.len == 0)) {
+    fn writeEnums(self: *Context, enums: []const ast.Enum) !void {
+        if (!self.opts.include_enums or (self.opts.exclude_zero_values and enums.len == 0)) {
             return;
         }
 
-        try self.writer.writeAll("enums:");
-        self.incrIndent();
-        defer self.decrIndent();
-        for (enums) |enumType| {
-            try self.writeKey("- name");
-            try self.writer.print(" \"{s}\"", .{enumType.name.value});
-            self.incrIndent();
-            defer self.decrIndent();
+        try self.writeKey("enums");
+        try self.startArray();
+        defer self.endArray();
 
-            try self.writeDocumentation(enumType.documentation);
+        for (enums) |enum_type| {
+            try self.startObject();
+            defer self.endObject();
 
-            if (self.includeRange) {
+            try self.writeKey("name");
+            try self.writeQuotedValue("{s}", .{enum_type.name.value});
+
+            try self.writeDocumentation(enum_type.documentation);
+
+            if (self.opts.include_range) {
                 try self.writeKey("range");
-                try self.writeRange(enumType.range);
+                try self.writeRange(enum_type.range);
             }
 
-            if (enumType.annotations.len > 0 or !self.excludeZeroValues) {
-                try self.writeKey("options");
-                try self.writeOptions(enumType.annotations, false);
+            if (enum_type.annotations.len > 0 or !self.opts.exclude_zero_values) {
+                try self.writeKey("annotations");
+                try self.writeAnnotations(enum_type.annotations, false);
             }
 
-            if (enumType.variants.len > 0 or !self.excludeZeroValues) {
+            if (enum_type.variants.len > 0 or !self.opts.exclude_zero_values) {
                 try self.writeKey("variants");
-                self.incrIndent();
-                defer self.decrIndent();
-                for (enumType.variants) |variant| {
+                try self.startArray();
+                defer self.endArray();
+
+                for (enum_type.variants) |variant| {
                     try self.writeEnumVariant(variant);
                 }
             }
         }
-        try self.writeNewLine();
     }
 
-    fn writeDataType(self: *Self, dataType: ast.Field.RangedDataType) !void {
+    fn writeDataType(self: *Context, data_type: ast.Field.RangedDataType) !void {
         try self.writeKey("type");
 
-        switch (dataType.value) {
-            .String => |selector| {
-                try self.writer.print(" \"{s}\"", .{selector.content});
+        switch (data_type.value) {
+            .string => |key_path| {
+                try self.writeQuotedValue("{s}", .{key_path.content});
             },
-            .List => |selector| {
-                try self.writer.print(" \"list[item={s}]\"", .{selector.content});
+            .list => |key_path| {
+                try self.writeQuotedValue("list[item={s}]", .{key_path.content});
             },
-            .Map => |mapInfo| {
-                try self.writer.print(" \"map[key={s}, value={s}]\"", .{ mapInfo.key.content, mapInfo.value.content });
+            .map => |map_info| {
+                try self.writeQuotedValue("map[key={s}, value={s}]", .{ map_info.key.content, map_info.value.content });
             },
-            .OneOf => |oneOfInfo| {
-                try self.writer.writeAll(" \"oneof\"");
+            .oneof => |oneof_info| {
+                try self.writeValue("{s}", .{"oneof"});
 
-                if (oneOfInfo.options.len > 0 or !self.excludeZeroValues) {
+                if (oneof_info.annotations.len > 0 or !self.opts.exclude_zero_values) {
                     try self.writeKey("oneof_options");
-                    try self.writeOptions(oneOfInfo.options, false);
+                    try self.writeAnnotations(oneof_info.annotations, false);
                 }
 
-                if (oneOfInfo.fields.len > 0 or !self.excludeZeroValues) {
+                if (oneof_info.fields.len > 0 or !self.opts.exclude_zero_values) {
                     try self.writeKey("oneof_fields");
-                    self.incrIndent();
-                    defer self.decrIndent();
-                    for (oneOfInfo.fields) |field| {
+                    try self.startArray();
+                    defer self.endArray();
+                    for (oneof_info.fields) |field| {
                         try self.writeField(field);
                     }
                 }
             },
         }
 
-        if (self.includeRange) {
+        if (self.opts.include_range) {
             try self.writeKey("type_range");
-            try self.writeRange(dataType.range);
+            try self.writeRange(data_type.range);
         }
     }
 
-    fn writeField(self: *Self, field: ast.Field) std.Io.Writer.Error!void {
-        try self.writeKey("- name");
-        try self.writer.print(" \"{s}\"", .{field.name.value});
-        self.incrIndent();
-        defer self.decrIndent();
+    fn writeField(self: *Context, field: ast.Field) std.Io.Writer.Error!void {
+        try self.startObject();
+        defer self.endObject();
+
+        try self.writeKey("name");
+        try self.writeQuotedValue("{s}", .{field.name.value});
 
         try self.writeDocumentation(field.documentation);
 
-        if (self.includeRange) {
+        if (self.opts.include_range) {
             try self.writeKey("range");
             try self.writeRange(field.range);
         }
@@ -437,322 +503,336 @@ const Context = struct {
 
         if (field.tag) |tag| {
             try self.writeKey("tag");
-            try self.writer.print(" {d}", .{tag});
-        } else if (!self.excludeZeroValues) {
+            try self.writeValue("{d}", .{tag});
+        } else if (!self.opts.exclude_zero_values) {
             try self.writeKey("tag");
-            try self.writer.writeAll(" ");
-            try self.writer.writeAll(LiteralNone);
+            try self.writeValue("{s}", .{LiteralNone});
         }
 
         try self.writeKey("nullable");
-        try self.writer.print(" {any}", .{field.nullable});
+        try self.writeValue("{any}", .{field.nullable});
 
         if (field.oneof_group_index) |index| {
             try self.writeKey("oneof_group_index");
-            try self.writer.print(" {d}", .{index});
+            try self.writeValue("{d}", .{index});
         }
 
-        if (field.annotations.len > 0 or !self.excludeZeroValues) {
-            try self.writeKey("options");
-            try self.writeOptions(field.annotations, false);
-        }
-    }
-
-    fn writeOneOf(self: *Self, oneOf: ast.OneOf) !void {
-        try self.writeKey("- name");
-        try self.writer.print(" \"{s}\"", .{oneOf.name.value});
-        self.incrIndent();
-        defer self.decrIndent();
-
-        if (self.includeRange) {
-            try self.writeKey("range");
-            try self.writeRange(oneOf.range);
-        }
-
-        if (oneOf.annotations.len > 0 or !self.excludeZeroValues) {
-            try self.writeKey("options");
-            try self.writeOptions(oneOf.annotations, false);
+        if (field.annotations.len > 0 or !self.opts.exclude_zero_values) {
+            try self.writeKey("annotations");
+            try self.writeAnnotations(field.annotations, false);
         }
     }
 
-    fn writeMessage(self: *Self, message: ast.Struct) !void {
-        try self.writeKey("- name");
-        try self.writer.print(" \"{s}\"", .{message.name.value});
-        self.incrIndent();
-        defer self.decrIndent();
+    fn writeOneOf(self: *Context, oneof: ast.OneOf) !void {
+        try self.startObject();
+        defer self.endObject();
 
-        try self.writeDocumentation(message.documentation);
+        try self.writeKey("name");
+        try self.writeQuotedValue("{s}", .{oneof.name.value});
 
-        if (self.includeRange) {
+        if (self.opts.include_range) {
             try self.writeKey("range");
-            try self.writeRange(message.range);
+            try self.writeRange(oneof.range);
         }
 
-        if (message.embedded_structs.len > 0 or !self.excludeZeroValues) {
+        if (oneof.annotations.len > 0 or !self.opts.exclude_zero_values) {
+            try self.writeKey("annotations");
+            try self.writeAnnotations(oneof.annotations, false);
+        }
+    }
+
+    fn writeStruct(self: *Context, struct_info: ast.Struct) !void {
+        try self.startObject();
+        defer self.endObject();
+
+        try self.writeKey("name");
+        try self.writeQuotedValue("{s}", .{struct_info.name.value});
+
+        try self.writeDocumentation(struct_info.documentation);
+
+        if (self.opts.include_range) {
+            try self.writeKey("range");
+            try self.writeRange(struct_info.range);
+        }
+
+        if (struct_info.embedded_structs.len > 0 or !self.opts.exclude_zero_values) {
             try self.writeKey("embedded_messages");
-            self.incrIndent();
-            defer self.decrIndent();
-            for (message.embedded_structs) |embeddedMsg| {
-                try self.writeArrayPrefix();
-                try self.writeSelector(embeddedMsg);
+            try self.startArray();
+            defer self.endArray();
+
+            for (struct_info.embedded_structs) |embedded_struct| {
+                try self.writeKeyPath(embedded_struct);
             }
         }
 
-        if (message.annotations.len > 0 or !self.excludeZeroValues) {
-            try self.writeKey("options");
-            try self.writeOptions(message.annotations, false);
+        if (struct_info.annotations.len > 0 or !self.opts.exclude_zero_values) {
+            try self.writeKey("annotations");
+            try self.writeAnnotations(struct_info.annotations, false);
         }
 
-        if (message.oneof_groups.len > 0 or !self.excludeZeroValues) {
+        if (struct_info.oneof_groups.len > 0 or !self.opts.exclude_zero_values) {
             try self.writeKey("oneof_groups");
-            self.incrIndent();
-            defer self.decrIndent();
-            for (message.oneof_groups) |oneOf| {
-                try self.writeOneOf(oneOf);
+            try self.startArray();
+            defer self.endArray();
+            for (struct_info.oneof_groups) |oneof| {
+                try self.writeOneOf(oneof);
             }
         }
 
-        if (message.fields.len > 0 or !self.excludeZeroValues) {
+        if (struct_info.fields.len > 0 or !self.opts.exclude_zero_values) {
             try self.writeKey("fields");
-            self.incrIndent();
-            defer self.decrIndent();
-            for (message.fields) |field| {
+            try self.startArray();
+            defer self.endArray();
+            for (struct_info.fields) |field| {
                 try self.writeField(field);
             }
         }
     }
 
-    fn writeMessages(self: *Self, messages: []const ast.Struct) !void {
-        if (!self.includeMessages or (self.excludeZeroValues and messages.len == 0)) {
+    fn writeStructs(self: *Context, structs: []const ast.Struct) !void {
+        if (!self.opts.include_structs or (self.opts.exclude_zero_values and structs.len == 0)) {
             return;
         }
 
-        try self.writer.writeAll("messages:");
-        self.incrIndent();
-        defer self.decrIndent();
-        for (messages) |message| {
-            try self.writeMessage(message);
+        try self.writeKey("structs");
+        try self.startArray();
+        defer self.endArray();
+        for (structs) |struct_info| {
+            try self.writeStruct(struct_info);
         }
-        try self.writeNewLine();
     }
 
-    fn writeOptionTargets(self: *Self, targets: ast.AnnotationTargetSet) !void {
+    fn writeAnnotationTargets(self: *Context, targets: ast.AnnotationTargetSet) !void {
         try self.writeKey("targets");
-        self.incrIndent();
-        defer self.decrIndent();
+        try self.startArray();
+        defer self.endArray();
 
         var it = targets.iterator();
         while (it.next()) |target| {
-            try self.writeArrayPrefix();
-            try self.writer.print("{s}", .{@tagName(target)});
+            try self.writeValue("{s}", .{@tagName(target)});
         }
-        self.inArray = false;
-        try self.writeNewLine();
     }
 
-    fn writeFuncArg(self: *Self, arg: ast.FuncArg) !void {
+    fn writeFuncArg(self: *Context, arg: ast.FuncArg) !void {
+        try self.startObject();
+        defer self.endObject();
+
         try self.writeKey("name");
-        try self.writeSelector(arg.name);
+        try self.writeKeyPath(arg.name);
         try self.writeKey("streaming");
-        try self.writer.print(" {any}", .{arg.streaming});
+        try self.writeValue("{any}", .{arg.streaming});
     }
 
-    fn writeFunc(self: *Self, func: ast.Func) !void {
-        try self.writeKey("- name");
-        try self.writer.print(" \"{s}\"", .{func.name.value});
-        self.incrIndent();
-        defer self.decrIndent();
+    fn writeFunc(self: *Context, func: ast.Func) !void {
+        try self.startObject();
+        defer self.endObject();
+
+        try self.writeKey("name");
+        try self.writeQuotedValue("{s}", .{func.name.value});
 
         try self.writeDocumentation(func.documentation);
 
-        if (self.includeRange) {
+        if (self.opts.include_range) {
             try self.writeKey("range");
             try self.writeRange(func.range);
         }
 
         if (func.tag) |tag| {
             try self.writeKey("tag");
-            try self.writer.print(" {d}", .{tag});
-        } else if (!self.excludeZeroValues) {
+            try self.writeValue("{d}", .{tag});
+        } else if (!self.opts.exclude_zero_values) {
             try self.writeKey("tag");
-            try self.writer.writeAll(" ");
-            try self.writer.writeAll(LiteralNone);
+            try self.writeValue("{s}", .{LiteralNone});
         }
 
         // Write input argument
         if (func.input) |input| {
             try self.writeKey("input");
-            self.incrIndent();
-            defer self.decrIndent();
             try self.writeFuncArg(input);
-        } else if (!self.excludeZeroValues) {
+        } else if (!self.opts.exclude_zero_values) {
             try self.writeKey("input");
-            try self.writer.writeAll(" ");
-            try self.writer.writeAll(LiteralNone);
+            try self.writeValue("{s}", .{LiteralNone});
         }
 
         // Write output argument
         if (func.output) |output| {
             try self.writeKey("output");
-            self.incrIndent();
-            defer self.decrIndent();
             try self.writeFuncArg(output);
-        } else if (!self.excludeZeroValues) {
+        } else if (!self.opts.exclude_zero_values) {
             try self.writeKey("output");
-            try self.writer.writeAll(" ");
-            try self.writer.writeAll(LiteralNone);
+            try self.writeValue("{s}", .{LiteralNone});
         }
 
-        if (func.annotations.len > 0 or !self.excludeZeroValues) {
-            try self.writeKey("options");
-            try self.writeOptions(func.annotations, false);
+        if (func.annotations.len > 0 or !self.opts.exclude_zero_values) {
+            try self.writeKey("annotations");
+            try self.writeAnnotations(func.annotations, false);
         }
     }
 
-    fn writeOptionDefinition(self: *Self, optDef: ast.AnnotationDefinition) !void {
-        self.incrIndent();
-        defer self.decrIndent();
+    fn writeAnnotationDefinition(self: *Context, def: ast.AnnotationDefinition) !void {
+        try self.startObject();
+        defer self.endObject();
 
-        try self.writeOptionTargets(optDef.targets);
+        try self.writeAnnotationTargets(def.targets);
 
-        if (self.includeRange) {
+        if (self.opts.include_range) {
             try self.writeKey("range");
-            try self.writeRange(optDef.range);
+            try self.writeRange(def.range);
         }
 
-        if (optDef.fields.len > 0 or !self.excludeZeroValues) {
+        if (def.fields.len > 0 or !self.opts.exclude_zero_values) {
             try self.writeKey("fields");
-            self.incrIndent();
-            defer self.decrIndent();
-            for (optDef.fields) |field| {
+            try self.startArray();
+            defer self.endArray();
+
+            for (def.fields) |field| {
                 try self.writeField(field);
             }
         }
     }
 
-    fn writeOptionDefinitions(self: *Self, optionDefinitions: []const ast.AnnotationDefinition) !void {
-        if (!self.includeOptionDefinitions or (self.excludeZeroValues and optionDefinitions.len == 0)) {
+    fn writeAnnotationDefinitions(self: *Context, defs: []const ast.AnnotationDefinition) !void {
+        if (!self.opts.include_annotation_definitions or (self.opts.exclude_zero_values and defs.len == 0)) {
             return;
         }
 
-        try self.writer.writeAll("option_definitions:");
-        self.incrIndent();
-        defer self.decrIndent();
-        for (optionDefinitions) |optDef| {
-            try self.writeArrayPrefix();
-            try self.writeOptionDefinition(optDef);
+        try self.writeKey("annotation_definitions");
+        try self.startArray();
+        defer self.endArray();
+
+        for (defs) |def| {
+            try self.writeAnnotationDefinition(def);
         }
-        try self.writeNewLine();
     }
 
-    fn writeInterface(self: *Self, interface: ast.Protocol) !void {
-        try self.writeKey("- name");
-        try self.writer.print(" \"{s}\"", .{interface.name.value});
-        self.incrIndent();
-        defer self.decrIndent();
+    fn writeProtocol(self: *Context, protocol: ast.Protocol) !void {
+        try self.startObject();
+        defer self.endObject();
 
-        try self.writeDocumentation(interface.documentation);
+        try self.writeKey("name");
+        try self.writeQuotedValue("{s}", .{protocol.name.value});
 
-        if (self.includeRange) {
+        try self.writeDocumentation(protocol.documentation);
+
+        if (self.opts.include_range) {
             try self.writeKey("range");
-            try self.writeRange(interface.range);
+            try self.writeRange(protocol.range);
         }
 
-        if (interface.annotations.len > 0 or !self.excludeZeroValues) {
-            try self.writeKey("options");
-            try self.writeOptions(interface.annotations, false);
+        if (protocol.annotations.len > 0 or !self.opts.exclude_zero_values) {
+            try self.writeKey("annotations");
+            try self.writeAnnotations(protocol.annotations, false);
         }
 
-        if (interface.funcs.len > 0 or !self.excludeZeroValues) {
+        if (protocol.funcs.len > 0 or !self.opts.exclude_zero_values) {
             try self.writeKey("funcs");
-            self.incrIndent();
-            defer self.decrIndent();
-            for (interface.funcs) |func| {
+
+            try self.startArray();
+            defer self.endArray();
+
+            for (protocol.funcs) |func| {
                 try self.writeFunc(func);
             }
         }
     }
 
-    fn writeDocumentation(self: *Self, documentation: ?ast.Documentation) !void {
-        if (!self.includeDocumentation) {
+    fn writeDocumentation(self: *Context, documentation: ?ast.Documentation) !void {
+        if (!self.opts.include_documentation) {
             return;
         }
 
         if (documentation) |doc| {
             try self.writeKey("documentation");
-            try self.writer.writeAll(" |\n");
-            self.indentation += 1;
-            defer self.indentation -= 1;
+            try self.writeValue("|\n", .{});
+
             var cursor: usize = 0;
             while (cursor < doc.content.len) {
-                const end = cursor + (std.mem.indexOf(u8, doc.content[cursor..], "\n") orelse break);
+                const end = cursor + (std.mem.indexOfScalar(u8, doc.content[cursor..], '\n') orelse break);
                 if ((end - cursor) > 0) {
-                    _ = try self.writer.writeSplat(&.{" "}, self.indentation);
+                    _ = try self.writer.writeSplat(&.{" "}, (self.state.currentDepth() + 1) * 2);
                     try self.writer.writeAll(doc.content[cursor .. end + 1]);
                 } else try self.writer.writeAll("\n\n");
                 cursor = end + 1;
             }
-            try self.writeNewLine();
+            try self.writer.writeByte('\n');
         }
     }
 
-    fn writeInterfaces(self: *Self, interfaces: []const ast.Protocol) !void {
-        if (!self.includeInterfaces or (self.excludeZeroValues and interfaces.len == 0)) {
+    fn writeProtocols(self: *Context, protocols: []const ast.Protocol) !void {
+        if (!self.opts.include_protocols or (self.opts.exclude_zero_values and protocols.len == 0)) {
             return;
         }
 
-        try self.writer.writeAll("interfaces:");
-        self.incrIndent();
-        defer self.decrIndent();
-        for (interfaces) |interface| {
-            try self.writeInterface(interface);
+        try self.writeKey("protocols");
+        try self.startArray();
+        defer self.endArray();
+
+        for (protocols) |protocol| {
+            try self.writeProtocol(protocol);
         }
-        try self.writeNewLine();
     }
 };
 
+
 pub const YamlMarshaller = struct {
-    const Self = @This();
-
-    expandSelectors: bool = false,
-    includeRange: bool = false,
-    excludeZeroValues: bool = false,
-    includePact: bool = false,
-    includeImport: bool = false,
-    includeOptionAssignments: bool = false,
-    includeConstants: bool = false,
-    includeEnums: bool = false,
-    includeMessages: bool = false,
-    includeOptionDefinitions: bool = false,
-    includeInterfaces: bool = false,
-    includeDocumentation: bool = false,
-
-    pub fn writeDocument(self: Self, writer: *std.Io.Writer, doc: ast.Document) !void {
-        var filteredWriter = NewlineFilterWriter.init(writer);
+    pub fn writeDocument(writer: *std.Io.Writer, doc: ast.Document, opts: Options) !void {
         var ctx = Context{
-            .writer = &filteredWriter.interface,
-            .expandSelectors = self.expandSelectors,
-            .includeRange = self.includeRange,
-            .excludeZeroValues = self.excludeZeroValues,
-            .includePact = self.includePact,
-            .includeImport = self.includeImport,
-            .includeOptionAssignments = self.includeOptionAssignments,
-            .includeConstants = self.includeConstants,
-            .includeEnums = self.includeEnums,
-            .includeMessages = self.includeMessages,
-            .includeOptionDefinitions = self.includeOptionDefinitions,
-            .includeInterfaces = self.includeInterfaces,
-            .includeDocumentation = self.includeDocumentation,
+            .opts = opts,
+            .writer = writer,
+            .state = .{ .flag = 0 },
         };
 
         try ctx.writeDocumentation(doc.documentation);
-        try ctx.writePact(doc.pact);
         try ctx.writeImports(doc.imports);
-        try ctx.writeOptions(doc.annotations, true);
+        try ctx.writeAnnotations(doc.annotations, true);
         try ctx.writeConstants(doc.constants);
         try ctx.writeEnums(doc.enums);
-        try ctx.writeMessages(doc.structs);
-        try ctx.writeOptionDefinitions(doc.annotation_definitions);
-        try ctx.writeInterfaces(doc.protocols);
+        try ctx.writeStructs(doc.structs);
+        try ctx.writeAnnotationDefinitions(doc.annotation_definitions);
+        try ctx.writeProtocols(doc.protocols);
     }
 };
+
+test "yaml" {
+    const t = std.testing;
+
+    var writer = std.Io.Writer.Allocating.init(t.allocator);
+    defer writer.deinit();
+    var ctx: Context = .{ .state = .{ .flag = 0 }, .writer = &writer.writer, .opts = .{} };
+    try ctx.writeKey("key");
+    try ctx.writeValue("value", .{});
+    try ctx.writeKey("another");
+    try ctx.writeQuotedValue("ok, another", .{});
+    try ctx.writeKey("object");
+    try ctx.startObject();
+    try ctx.writeKey("values");
+    try ctx.startArray();
+    try ctx.writeValue("1", .{});
+    try ctx.writeValue("2", .{});
+    try ctx.startArray();
+    try ctx.writeValue("3", .{});
+    try ctx.writeValue("4", .{});
+    try ctx.startObject();
+    try ctx.writeKey("key");
+    try ctx.writeValue("value", .{});
+    try ctx.writeKey("key2");
+    try ctx.writeValue("value2", .{});
+    ctx.endObject();
+    ctx.endArray();
+    ctx.endArray();
+    ctx.endObject();
+
+    const expected_output =
+        \\key: value
+        \\another: "ok, another"
+        \\object:
+        \\  values:
+        \\    - 1
+        \\    - 2:
+        \\      - 3
+        \\      - 4
+        \\      - key: value
+        \\        key2: value2
+        ;
+    try t.expectEqualStrings(expected_output, writer.written());
+}

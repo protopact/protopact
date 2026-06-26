@@ -289,12 +289,13 @@ test "tokenize" {
                 return error.TestErrorWasNotReturned;
             } else {
                 try std.testing.expectEqualStrings(expectedErr.message, result.errors[index].message);
-                try std.testing.expectEqualStrings(expectedErr.literal, result.errors[index].literal orelse "");
+                const range = result.errors[index].range;
+                try std.testing.expectEqualStrings(expectedErr.literal, tt.source[range.start..range.end]);
             }
         }
 
         if (result.errors.len > tt.errors.len) {
-            try expectNoScanError(result.errors[tt.errors.len..]);
+            try expectNoScanError(tt.source, result.errors[tt.errors.len..]);
         }
 
         var testAllocator = std.heap.ArenaAllocator.init(std.testing.allocator);
@@ -308,12 +309,13 @@ test "tokenize" {
     }
 }
 
-fn expectNoScanError(errors: []const tokenizer.Error) !void {
+fn expectNoScanError(source: []const u8, errors: []const tokenizer.Error) !void {
     if (errors.len == 0) {
         return;
     }
 
     for (errors, 0..) |unexpectedErr, index| {
+        const range = unexpectedErr.range;
         std.debug.print(
             "Unexpected error[#{d}]:\n Message: {s}\n Range: {}-{}\n Literal: '{s}'\n",
             .{
@@ -321,7 +323,7 @@ fn expectNoScanError(errors: []const tokenizer.Error) !void {
                 unexpectedErr.message,
                 unexpectedErr.range.start,
                 unexpectedErr.range.end,
-                unexpectedErr.literal orelse "n/a",
+                source[range.start..range.end],
             },
         );
     }
@@ -395,7 +397,7 @@ test "range" {
 
         var result = try tokenizer.tokenizeAlloc(allocator, tt.source);
         defer result.deinit();
-        try expectNoScanError(result.errors);
+        try expectNoScanError(tt.source, result.errors);
         try formatTokenWithPosition(&writer, result.tokens);
         try std.testing.expectEqualStrings(
             tt.expectation,

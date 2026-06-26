@@ -34,8 +34,6 @@ const keyword_table = std.StaticStringMap(TokenKind).initComptime(.{
 
 pub const Error = struct {
     message: []const u8,
-    // literal is the part of the source that is related to the error.
-    literal: ?[]const u8,
     range: ast.Range,
 
     const UnexpectedEOF = "unexpected EOF";
@@ -343,7 +341,6 @@ pub const Iterator = struct {
         self.errors.appendAssumeCapacity(Error{
             .message = message,
             .range = self.currentRange(),
-            .literal = "",
         });
     }
 
@@ -354,7 +351,6 @@ pub const Iterator = struct {
         self.errors.appendAssumeCapacity(Error{
             .message = message,
             .range = self.currentRange(),
-            .literal = self.currentLexeme(),
         });
     }
 
@@ -409,7 +405,7 @@ pub const Iterator = struct {
         self.i += 1;
     }
 
-    pub inline fn currentAssumeSafe(self: *Iterator) Token {
+    pub inline fn currentAssumeSafe(self: *const Iterator) Token {
         return self.tokens.buffer[self.i - 1];
     }
 

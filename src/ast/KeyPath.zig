@@ -126,8 +126,8 @@ pub fn init(segment: []const u8, range: Range) Self {
     };
 }
 
-pub fn builder(allocator: Allocator, contentSize: usize, segmentCount: usize) Allocator.Error!Builder {
-    return try Builder.init(allocator, contentSize, segmentCount);
+pub fn builder(allocator: Allocator, content_size: usize, segment_count: usize) Allocator.Error!Builder {
+    return try Builder.init(allocator, content_size, segment_count);
 }
 
 pub fn iterator(self: *const Self) Iterator {

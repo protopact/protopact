@@ -67,7 +67,7 @@ pub const AnnotationNode = struct {
     profiles: []const Identifier,
 
     /// selector is the key used for the assignment. For instance in a.b = 1, "a.b" is the selector.
-    keypath: KeyPath,
+    key_path: KeyPath,
 
     /// value is the assigned value, which can be a group if a nested block is used or a single ranged value.
     value: Value,
@@ -163,7 +163,7 @@ pub const Field = struct {
     };
     pub const OneOfTypeInfo = struct {
         fields: []const Field,
-        options: []const AnnotationNode,
+        annotations: []const AnnotationNode,
     };
     pub const MapTypeInfo = struct {
         key: KeyPath,
