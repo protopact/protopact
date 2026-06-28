@@ -1,6 +1,6 @@
 # simple string
 
-```pactum
+```pragma
 const name = "Pancake"
 ```
 
@@ -15,7 +15,7 @@ constants:
 
 # simple number with options
 
-```pactum
+```pragma
 const name = 1 { required }
 ```
 
@@ -39,7 +39,7 @@ constants:
 
 # const group
 
-```pactum
+```pragma
 const (
 	items = ["a" 1 false] { ignore = false }
 	object = {
@@ -76,10 +76,10 @@ constants:
     value:
       range: "3:11-5:3[60-86]"
       data:
-        key: "name"
-        value:
-          range: "4:11-22[72-83]"
-          data: "something"
+        - key: "name"
+          value:
+            range: "4:11-22[72-83]"
+            data: "something"
     annotations:
       block:
         - range: "5:6-19[89-102]"

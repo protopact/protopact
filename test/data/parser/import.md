@@ -1,6 +1,6 @@
 # single quote
 
-```pactum
+```pragma
 import 'some/package'
 ```
 
@@ -12,7 +12,7 @@ imports:
 
 # double quote
 
-```pactum
+```pragma
 import "some/package"
 ```
 
@@ -24,7 +24,7 @@ imports:
 
 # wildcard
 
-```pactum
+```pragma
 import # "some/package"
 ```
 
@@ -37,7 +37,7 @@ imports:
 
 # alias
 
-```pactum
+```pragma
 import name "some/package"
 ```
 
@@ -50,7 +50,7 @@ imports:
 
 # import group / all flavors
 
-```pactum
+```pragma
 import (
   #w "wildcard"
   alias "some/package"
@@ -73,7 +73,7 @@ imports:
 
 # import number (error)
 
-```pactum
+```pragma
 import 1.23
 ```
 
@@ -83,7 +83,7 @@ import 1.23
 
 # import with alias and no package (error)
 
-```pactum
+```pragma
 import alias
 ```
 

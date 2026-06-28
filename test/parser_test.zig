@@ -50,21 +50,6 @@ fn formatError(writer: *std.Io.Writer, err: parser.PragmaError, line_map: pragma
                     });
                 }
             },
-            // .Position => try writer.print("{d}:{d}[{d}] {s} @literal={?s}", .{
-            //     loc.Position.line,
-            //     loc.Position.column,
-            //     loc.Position.offset,
-            //     err.message,
-            //     err.literal,
-            // }),
-            // .Range => try writer.print("{d}:{d}[{d}-{d}] {s} @literal={?s}", .{
-            //     loc.Range.start.line,
-            //     loc.Range.start.column,
-            //     loc.Range.start.offset,
-            //     loc.Range.endOffset,
-            //     err.message,
-            //     err.literal,
-            // }),
         }
     } else try writer.print("{s}", .{
         err.message,
@@ -158,6 +143,10 @@ fn runTests(comptime sourceFileName: []const u8, test_options: TestOptions) !voi
             try pragma.astcoder.YamlMarshaller.writeDocument(&output.writer, result.document, opts.coder_options);
         }
 
+        if (!result.ok()) {
+            try output.writer.writeByte('\n');
+        }
+
         for (result.errors) |err| {
             if (output.written().len > 0) {
                 try output.writer.writeByte('\n');
@@ -189,15 +178,16 @@ test "import" {
     });
 }
 
-// test "options" {
-//     try runTests("./data/parser/options.md", .{
-//         .marshaler = astcoder.YamlMarshaller{
-//             .includeOptionAssignments = true,
-//             .includeRange = true,
-//         },
-//         .writeDocumentOnError = true,
-//     });
-// }
+test "annotations" {
+    try runTests("./data/parser/annotations.md", .{
+        .coder_options = astcoder.Options{
+            .include_annotations = true,
+            .include_range = true,
+            .exclude_zero_values = true,
+        },
+        .write_document_on_error = true,
+    });
+}
 
 test "constants" {
     try runTests("./data/parser/constants.md", .{

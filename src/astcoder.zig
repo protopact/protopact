@@ -286,6 +286,9 @@ const Context = struct {
                 }
             },
             .object => {
+                try self.startArray();
+                defer self.endArray();
+
                 for (value.literal.object) |item| {
                     try self.startObject();
                     defer self.endObject();
