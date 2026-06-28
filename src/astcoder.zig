@@ -196,6 +196,22 @@ const Context = struct {
         } else try self.writeQuotedValue("{d}", .{offset});
     }
 
+    fn writeAnnotationGroup(self: *Context, group: *const ast.AnnotationGroup) std.Io.Writer.Error!void {
+        if (!self.opts.include_annotations or (self.opts.exclude_zero_values and group.values.len == 0)) {
+            return;
+        }
+
+        if (group.block) {
+            try self.startObject();
+            defer self.endObject();
+
+            try self.writeKey("block");
+            try self.writeAnnotations(group.values, false);
+        } else {
+            try self.writeAnnotations(group.values, false);
+        }
+    }
+
     fn writeAnnotations(
         self: *Context,
         annotations: []const ast.AnnotationNode,
@@ -214,18 +230,34 @@ const Context = struct {
             try self.startObject();
             defer self.endObject();
 
-            try self.writeKey("extra");
-            try self.writeValue("{any}", .{annotation.flags.extra});
+            if (!self.opts.exclude_zero_values or annotation.flags.extra) {
+                try self.writeKey("extra");
+                try self.writeValue("{any}", .{annotation.flags.extra});
+            }
 
-            try self.writeKey("private");
-            try self.writeValue("{any}", .{annotation.flags.private});
+            if (!self.opts.exclude_zero_values or annotation.flags.private) {
+                try self.writeKey("private");
+                try self.writeValue("{any}", .{annotation.flags.private});
+            }
+
+            if (!self.opts.exclude_zero_values or annotation.flags.bare) {
+                try self.writeKey("bare");
+                try self.writeValue("{any}", .{annotation.flags.bare});
+            }
+
+            if (!self.opts.exclude_zero_values or annotation.flags.headless) {
+                try self.writeKey("headless");
+                try self.writeValue("{any}", .{annotation.flags.headless});
+            }
 
             if (self.opts.include_range) {
                 try self.writeKey("range");
                 try self.writeRange(annotation.range);
             }
-            try self.writeKey("key_path");
-            try self.writeKeyPath(annotation.key_path);
+            if (!annotation.flags.headless) {
+                try self.writeKey("key_path");
+                try self.writeKeyPath(annotation.key_path);
+            }
             try self.writeAnnotationValue(&annotation.value);
         }
     }
@@ -302,8 +334,10 @@ const Context = struct {
                 try self.writeQuotedValue("{s}", .{import.alias});
             }
 
-            try self.writeKey("bare");
-            try self.writeValue("{any}", .{import.bare});
+            if (!self.opts.exclude_zero_values or import.bare) {
+                try self.writeKey("bare");
+                try self.writeValue("{any}", .{import.bare});
+            }
             try self.writeKey("path");
             try self.writeQuotedValue("{s}", .{import.path});
             if (self.opts.include_range) {
@@ -372,9 +406,9 @@ const Context = struct {
             try self.writeKey("value");
             try self.writeRangedLiteral(&constant.value);
 
-            if (constant.annotations.len > 0 or !self.opts.exclude_zero_values) {
+            if (constant.annotations.values.len > 0 or !self.opts.exclude_zero_values) {
                 try self.writeKey("annotations");
-                try self.writeAnnotations(constant.annotations, false);
+                try self.writeAnnotationGroup(&constant.annotations);
             }
         }
     }

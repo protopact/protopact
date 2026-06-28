@@ -1,3 +1,5 @@
+// TODO: Use group ID to learn if a decl is inside a paran group.
+
 const std = @import("std");
 const tokenizer = @import("tokenizer.zig");
 const ast = @import("ast.zig");
@@ -141,27 +143,23 @@ pub const PragmaError = struct {
 };
 
 /// Result of a parse operation with some partial or complete data.
-/// If the parse operation is successful or partial but with a successful recovery, scopeExited is false.
-/// If recovery leads to escaping the parent scope, then scopeExited is true and means the caller's scope is
-/// exited.
+/// If the parse operation is successful or partial but with a successful recovery, needs_recovery is false.
+/// If recovery leads to escaping the parent scope, then needs_recovery is set to true
+/// and means the caller's scope is possibly exited.
 fn ParseResult(T: type) type {
     return struct {
-        /// data is the
+        /// data is the completely or partially parsed data.
         data: T,
-        scope_exited: bool,
+        needs_recovery: bool,
 
         const Self = @This();
 
         fn initOk(value: T) Self {
-            return .{ .data = value, .scope_exited = false };
+            return .{ .data = value, .needs_recovery = false };
         }
 
-        fn initScopeExited(value: T) Self {
-            return .{ .data = value, .scope_exited = true };
-        }
-
-        fn initValue(value: T, scopeExited: bool) Self {
-            return .{ .data = value, .scope_exited = scopeExited };
+        fn init(value: T, needs_recovery: bool) Self {
+            return .{ .data = value, .needs_recovery = needs_recovery };
         }
     };
 }
@@ -303,31 +301,36 @@ const Context = struct {
     }
 
     fn processImport(self: *Context) Error!void {
-        try self.processGroup(processImportBody);
+        const recovery_points: []const TokenKindTag = &.{ .String, .Hash, .Identifier };
+        try self.processGroupNew(recovery_points, processImportBody);
     }
 
     fn processImportBody(self: *Context) Error!void {
-        const start = self.currentRangeAssumeSafe().start;
+        var start: ?usize = null;
         const bare = self.consumeOptionalTokenBool(.Hash);
         var alias: []const u8 = "";
 
-        if (self.consumeOptionalToken(.Identifier)) |alias_token| {
-            alias = try self.copyString(alias_token.literal);
+        if (bare) {
+            start = self.currentRangeAssumeSafe().start;
         }
 
-        const path_token = self.consumeRequiredToken(.String, "path string") catch |err| {
-            return self.recover(err, &.{ .String, .Hash, .Identifier });
-        };
+        if (self.consumeOptionalToken(.Identifier)) |alias_token| {
+            alias = try self.copyString(alias_token.literal);
+            start = start orelse alias_token.range.start;
+        }
+
+        const path_token = try self.consumeRequiredToken(.String, "path string");
         try self.imports.append(self.allocator, .{
             .bare = bare,
             .alias = alias,
             .path = try path_token.kind.String.toOwnedAndEscaped(self.allocator),
-            .range = .{ .start = start, .end = path_token.range.end },
+            .range = .{ .start = start orelse path_token.range.start, .end = path_token.range.end },
         });
     }
 
     fn processConst(self: *Context) Error!void {
-        try self.processGroup(processConstBody);
+        const recovery_points: []const TokenKindTag = &.{ .Documentation, .Identifier };
+        try self.processGroupNew(recovery_points, processConstBody);
     }
 
     inline fn addConst(
@@ -336,7 +339,7 @@ const Context = struct {
         value: ast.RangedLiteral,
         documentation: ?ast.Documentation,
         start: usize,
-        annotations: []ast.AnnotationNode,
+        annotations: ast.AnnotationGroup,
     ) Allocator.Error!void {
         try self.constants.append(self.allocator, ast.Constant{
             .name = .{ .value = try self.copyString(name.literal), .range = name.range },
@@ -347,36 +350,48 @@ const Context = struct {
         });
     }
 
+    fn createAnnotationRoot(
+        self: *Context,
+        start: usize,
+        annotations: []const ast.AnnotationNode
+    ) error{OutOfMemory}![]const ast.AnnotationNode {
+        const block = try self.allocator.create(ast.AnnotationNode);
+        block.flags = .{ .private = false, .extra = false, .bare = false, .headless = true };
+        block.range = .{ .start = start, .end = self.currentRangeAssumeSafe().end };
+        block.value = .{ .group = annotations };
+        block.profiles = &.{};
+        block.key_path = .init("", .zero);
+        var slice: []const ast.AnnotationNode = undefined;
+        slice.ptr = @ptrCast(block);
+        slice.len = 1;
+        return slice;
+    }
+
     fn processConstBody(self: *Context) Error!void {
-        const ConstRecoveryPoints: []const TokenKindTag = &.{ .Documentation, .Identifier };
         const documentation = try self.consumeStagedDocumentation();
-        const start = self.currentRangeAssumeSafe().start;
-        const name_token = self.consumeRequiredToken(.Identifier, "const name") catch |err| {
-            return self.recover(err, ConstRecoveryPoints);
-        };
-        // TODO: already can prepare the const and avoid the addConst function calls.
-        _ = self.consumeRequiredToken(.Equal, "=") catch |err| {
-            return self.recover(err, ConstRecoveryPoints);
-        };
+        const name_token = try self.consumeRequiredToken(.Identifier, "const name");
+        _ = try self.consumeRequiredToken(.Equal, "=");
 
-        const value = if (self.parseValue()) |v| blk: {
-            if (v.scope_exited) {
-                try self.addConst(name_token, v.data, documentation, start, &.{});
-                return;
+        const value = try self.parseValue();
+        if (value.needs_recovery) {
+            try self.addConst(name_token, value.data, documentation, name_token.range.start, .empty);
+            return;
+        }
+
+        if (!self.nextTokenIs(.LeftCurlyBrace)) {
+            try self.addConst(name_token, value.data, documentation, name_token.range.start, .empty);
+            return;
+        }
+        if (self.parseAnnotationBlock()) |v| {
+            const block: ast.AnnotationGroup = .{ .values = v.data, .block = true };
+            try self.addConst(name_token, value.data, documentation, name_token.range.start, block);
+            if (v.needs_recovery) {
+                return error.UnexpectedToken;
             }
-            break :blk v.data;
-        } else |err| return self.recover(err, ConstRecoveryPoints);
-
-        const annotations: []ast.AnnotationNode = if (self.nextTokenIs(.LeftCurlyBrace)) blk: {
-            if (self.parseAnnotationBlock()) |v| {
-                break :blk v.data;
-            } else |err| {
-                try self.addConst(name_token, value, documentation, start, &.{});
-                return self.recover(err, ConstRecoveryPoints);
-            }
-        } else &.{};
-
-        try self.addConst(name_token, value, documentation, start, annotations);
+        } else |err| {
+            try self.addConst(name_token, value.data, documentation, name_token.range.start, .empty);
+            return err;
+        }
     }
 
     // fn processEnum(self: *Context) Error!void {
@@ -477,10 +492,10 @@ const Context = struct {
     //         }
     //     }
     //
-    //     return if (self.parseItemOptions(.Comma)) |v| .initValue(
+    //     return if (self.parseItemOptions(.Comma)) |v| .init(
     //         try self.buildEnumVariant(nameToken, value, documentation, v.data),
     //         v.scope_exited,
-    //     ) else |err| .initValue(
+    //     ) else |err| .init(
     //         try self.buildEnumVariant(nameToken, value, documentation, &.{}),
     //         try self.recoverExitsScope(err, EnumBodyRecoveryPoints),
     //     );
@@ -631,10 +646,10 @@ const Context = struct {
     //         }
     //     }
     //
-    //     return if (self.parseItemOptions(.Comma)) |v| .initValue(
+    //     return if (self.parseItemOptions(.Comma)) |v| .init(
     //         try self.buildField(nameToken, documentation, v.data, nullable, tag, dataType.data, oneOfGroupIndex),
     //         v.scope_exited,
-    //     ) else |err| .initValue(
+    //     ) else |err| .init(
     //         try self.buildField(nameToken, documentation, &.{}, nullable, tag, dataType.data, oneOfGroupIndex),
     //         try self.recoverExitsScope(err, MessageBodyRecoveryPoints),
     //     );
@@ -654,7 +669,7 @@ const Context = struct {
     //             const start = nextToken.position;
     //             self.consume();
     //             const oneOfBody = try self.parseOneOfBodyType();
-    //             return .initValue(ast.Field.RangedDataType{
+    //             return .init(ast.Field.RangedDataType{
     //                 .value = .{ .OneOf = oneOfBody.data },
     //                 .range = ast.Range{
     //                     .start = start,
@@ -741,7 +756,7 @@ const Context = struct {
     //         }
     //     };
     //
-    //     return .initValue(
+    //     return .init(
     //         .{ .options = try options.toOwnedSlice(self.allocator) },
     //         scopeExited and self.scopeDelimiterContext() + 1 != currentScope,
     //     );
@@ -995,6 +1010,55 @@ const Context = struct {
     //     };
     // }
 
+    inline fn processGroupNew(
+        self: *Context,
+        comptime recovery_tokens: []const TokenKindTag,
+        comptime handler: fn (self: *Context) Error!void,
+    ) Error!void {
+        // NB: If there is no left paran '(', then it's not a group, just run the handler.
+        if (!(try self.consumeOptionalEnterScopeTokenBool(.LeftParan))) {
+            return handler(self);
+        }
+
+        // If there is any staged documentation, it is invalid and should be ignored.
+        if (!self.staged_documentation.empty()) {
+            self.addError(PragmaError.unusedDocumentation(self.staged_documentation.start));
+            self.staged_documentation.reset();
+        }
+
+        while (true) {
+            const next = try self.peekNextOrError();
+            if (next.kind == .RightParan) {
+                self.popScopeDelimiter(.Paran);
+                self.consume();
+                break;
+            } else {
+                handler(self) catch |err| switch (err) {
+                    Error.UnexpectedToken => {
+                        switch (self.scopeDelimiterContext()) {
+                            // outside of the paran scope; stop iterating.
+                            0 => break,
+                            // in the paran scope; skip the current line.
+                            1 => {
+                                self.it.goBack();
+                                if (try self.skipTokensUntilScope(recovery_tokens, 1)) {
+                                    break;
+                                }
+                            },
+                            // unlikely event, get out of the paran scope.
+                            else => {
+                                try self.skipTokensUntilRootScope();
+                                break;
+                            },
+                        }
+                    },
+                    else => return err,
+                };
+            }
+        }
+    }
+
+    // TODO: remove me.
     inline fn processGroup(self: *Context, comptime handler: fn (self: *Context) Error!void) Error!void {
         // NB: If there is no left paran '(', then it's not a group, just run the handler.
         if (!(try self.consumeOptionalEnterScopeTokenBool(.LeftParan))) {
@@ -1102,7 +1166,7 @@ const Context = struct {
 
         // Parse the key.
         const key_token = try self.peekNextOrError();
-        const keypath = switch (key_token.kind) {
+        const key_path = switch (key_token.kind) {
             .String => blk: {
                 if (!modifiers.extra) {
                     self.addError(PragmaError.extraAnnotationWithoutSigil(&key_token));
@@ -1115,7 +1179,7 @@ const Context = struct {
             },
             .Identifier => try self.parseKeyPath(),
             else => {
-                self.addError(PragmaError.expectToken(&key_token, "option identifier or key"));
+                self.addError(PragmaError.expectToken(&key_token, "annotation key path or string"));
                 self.consume();
                 return Error.UnexpectedToken;
             },
@@ -1124,10 +1188,10 @@ const Context = struct {
         if (self.it.peek(1)) |value_token| switch (value_token.kind) {
             .LeftCurlyBrace => {
                 const current_scope = self.scopeDelimiterContext();
-                return if (self.parseAnnotationBlock()) |v| .initValue(
+                return if (self.parseAnnotationBlock()) |v| .init(
                     ast.AnnotationNode{
                         .flags = .{ .private = modifiers.private, .extra = modifiers.extra },
-                        .key_path = keypath,
+                        .key_path = key_path,
                         .value = .{ .group = v.data },
                         .range = .{
                             .start = start,
@@ -1135,40 +1199,39 @@ const Context = struct {
                         },
                         .profiles = modifiers.profiles,
                     },
-                    v.scope_exited and (self.scopeDelimiterContext() + 1 != current_scope),
+                    v.needs_recovery and (self.scopeDelimiterContext() + 1 != current_scope),
                 ) else |err| err;
             },
             .Equal => {
                 self.consume();
                 const current_scope = self.scopeDelimiterContext();
-                return if (self.parseValue()) |v| .initValue(
+                return if (self.parseValue()) |v| .init(
                     ast.AnnotationNode{
                         .flags = .{ .extra = modifiers.extra, .private = modifiers.private },
-                        .key_path = keypath,
+                        .key_path = key_path,
                         .value = .{ .leaf = v.data },
                         .range = .{
-                            .start = start,
+                            .start = key_path.range.start,
                             .end = v.data.range.end,
                         },
                         .profiles = modifiers.profiles,
                     },
-                    v.scope_exited and (self.scopeDelimiterContext() != current_scope),
+                    v.needs_recovery and (self.scopeDelimiterContext() != current_scope),
                 ) else |err| err;
             },
             else => {},
         };
 
-        const range = ast.Range{ .start = start, .end = keypath.range.end };
         return .initOk(ast.AnnotationNode{
             .flags = .{ .extra = modifiers.extra, .private = modifiers.private },
-            .key_path = keypath,
+            .key_path = key_path,
             .value = .{
                 .leaf = .{
                     .literal = .{ .boolean = true },
-                    .range = range,
+                    .range = key_path.range,
                 },
             },
-            .range = range,
+            .range = key_path.range,
             .profiles = modifiers.profiles,
         });
     }
@@ -1185,7 +1248,7 @@ const Context = struct {
         var values = StackFallbackArray(ast.AnnotationNode, 16).init(self.transient_allocator);
         _ = try self.consumeRequiredToken(.LeftCurlyBrace, "{");
         const current_scope = self.scopeDelimiterContext();
-        const scope_exited = blk: {
+        const parent_might_need_recovery = blk: {
             while (true) {
                 const token = self.it.peek(1) orelse break :blk false;
                 switch (token.kind) {
@@ -1194,21 +1257,22 @@ const Context = struct {
                         self.popScopeDelimiter(.CurlyBrace);
                         break :blk false;
                     },
+                    .Comma => self.consume(),
                     else => if (self.parseAnnotation(true, null)) |v| {
                         try values.append(v.data);
-                        if (v.scope_exited) break :blk true;
+                        if (v.needs_recovery) {
+                            break :blk true;
+                        }
                     } else |err| {
-                        if (try self.recoverExitsScope(err, AnnotationBlockRecoveryPoints))
+                        if (try self.recoverExitsScope(err, AnnotationBlockRecoveryPoints, current_scope))
                             break :blk true;
                     },
                 }
-
-                _ = self.consumeOptionalTokenBool(.Comma);
             }
         };
-        return .initValue(
+        return .init(
             try values.toOwnedSlice(self.allocator),
-            scope_exited and (self.scopeDelimiterContext() + 1 != current_scope),
+            parent_might_need_recovery and (self.scopeDelimiterContext() + 1 != current_scope),
         );
     }
 
@@ -1231,9 +1295,9 @@ const Context = struct {
         const start = self.currentRangeAssumeSafe().start;
         const current_scope = self.scopeDelimiterContext();
 
-        const scope_exited = blk: {
+        const parent_might_need_recovery = blk: {
             while (true) {
-                const next = self.it.peek(1) orelse break :blk false;
+                const next = self.it.peek(1) orelse break :blk true;
                 switch (next.kind) {
                     .RightBracket => {
                         self.popScopeDelimiter(.Bracket);
@@ -1243,22 +1307,20 @@ const Context = struct {
                     .Comma => self.consume(),
                     else => if (self.parseValue()) |v| {
                         try values.append(v.data);
-                        if (v.scope_exited) {
+                        if (v.needs_recovery) {
                             break :blk true;
                         }
-                    } else |err| if (try self.recoverExitsScope(err, ArrayRecoveryPoints)) {
+                    } else |err| if (try self.recoverExitsScope(err, ArrayRecoveryPoints, current_scope)) {
                         break :blk true;
                     },
                 }
-
-                _ = self.consumeOptionalTokenBool(.Comma);
             }
         };
 
-        return .initValue(.{
+        return .init(.{
             .literal = ast.LiteralValue{ .array = try values.toOwnedSlice(self.allocator) },
             .range = .{ .start = start, .end = self.it.currentAssumeSafe().range.end },
-        }, scope_exited and (self.scopeDelimiterContext() + 1 != current_scope));
+        }, parent_might_need_recovery and (self.scopeDelimiterContext() + 1 != current_scope));
     }
 
     /// parses a map of ranged values.
@@ -1271,7 +1333,7 @@ const Context = struct {
         const start = self.currentRangeAssumeSafe().start;
         const current_scope = self.scopeDelimiterContext();
 
-        const scope_exited = blk: {
+        const parent_might_need_recovery = blk: {
             while (true) {
                 const next = self.it.next() orelse break :blk true;
                 switch (next.kind) {
@@ -1282,31 +1344,33 @@ const Context = struct {
                     .Comma => {},
                     .String => {
                         _ = self.consumeRequiredToken(.Colon, ":") catch |err| {
-                            if (try self.recoverExitsScope(err, ObjectRecoveryPoints))
+                            if (try self.recoverExitsScope(err, ObjectRecoveryPoints, current_scope))
                                 break :blk true;
                         };
                         if (self.parseValue()) |v| {
                             try values.append(ast.Pair{
-                                .key = .{ .string =  try next.kind.String.toOwnedAndEscaped(self.allocator) },
+                                .key = .{ .string = try next.kind.String.toOwnedAndEscaped(self.allocator) },
                                 .value = v.data,
                             });
-                            if (v.scope_exited)
+                            if (v.needs_recovery) {
                                 break :blk true;
-                        } else |err| if (try self.recoverExitsScope(err, ObjectRecoveryPoints))
+                            }
+                        } else |err| if (try self.recoverExitsScope(err, ObjectRecoveryPoints, current_scope)) {
                             break :blk true;
+                        }
                     },
                     else => {
                         self.addError(PragmaError.expectToken(&next, "key string literal"));
-                        break :blk try self.skipTokensUntil(ObjectRecoveryPoints);
+                        break :blk try self.skipTokensUntilScope(ObjectRecoveryPoints, current_scope);
                     },
                 }
             }
         };
 
-        return .initValue(.{
+        return .init(.{
             .literal = ast.LiteralValue{ .object = try values.toOwnedSlice(self.allocator) },
             .range = .{ .start = start, .end = self.currentRangeAssumeSafe().end },
-        }, scope_exited and (self.scopeDelimiterContext() + 1 != current_scope));
+        }, parent_might_need_recovery and (self.scopeDelimiterContext() + 1 != current_scope));
     }
 
     fn parseValue(self: *Context) Error!ParseResult(ast.RangedLiteral) {
@@ -1651,39 +1715,39 @@ const Context = struct {
     /// Skips tokens until encountering one of the specified token kinds. The matching token will NOT be consumed.
     ///
     /// Scope handling:
-    ///   - The function respects scope boundaries - if the current scope ends before finding a matching token,
+    ///   - The function respects scope boundaries - if the given scope ends before finding a matching token,
     ///     the search terminates.
     ///   - Opening and closing scope delimiters encountered during scanning are properly tracked to maintain
     ///     correct scope nesting.
     ///
-    /// Returns whether or not current scope is exited.
-    fn skipTokensUntil(
+    /// Returns whether or not given scope is exited.
+    fn skipTokensUntilScope(
         self: *Context,
         comptime kinds: []const TokenKindTag,
+        scope: usize,
     ) error{NestingDepthReached}!bool {
-        const current_scope = self.scopeDelimiterContext();
-        if (try self.handleScopeDelimiterRecovery(self.it.currentAssumeSafe().kind, current_scope)) {
+        if (try self.handleScopeDelimiterRecovery(self.it.currentAssumeSafe().kind, scope)) {
             self.consume();
             return true;
         }
         while (true) {
             const token = self.it.peek(1) orelse {
                 self.scope_delimiters.clear();
-                return current_scope > 0;
+                return scope > 0;
             };
             if (token.kind == .EOF) {
                 self.scope_delimiters.clear();
                 self.consume();
-                return current_scope > 0;
+                return scope > 0;
             }
 
-            if (try self.handleScopeDelimiterRecovery(token.kind, current_scope)) {
+            if (try self.handleScopeDelimiterRecovery(token.kind, scope)) {
                 self.consume();
                 return true;
             }
 
             // consider recovery tokens only if still in the same scope.
-            if (self.scopeDelimiterContext() == current_scope) {
+            if (self.scopeDelimiterContext() == scope) {
                 inline for (kinds) |kind| {
                     if (token.kind == kind) {
                         return false;
@@ -1694,6 +1758,23 @@ const Context = struct {
         }
     }
 
+    /// Skips tokens until encountering one of the specified token kinds. The matching token will NOT be consumed.
+    ///
+    /// Scope handling:
+    ///   - The function respects scope boundaries - if the current scope ends before finding a matching token,
+    ///     the search terminates.
+    ///   - Opening and closing scope delimiters encountered during scanning are properly tracked to maintain
+    ///     correct scope nesting.
+    ///
+    /// Returns whether or not current scope is exited.
+    /// TODO: maybe delete this function.
+    fn skipTokensUntil(
+        self: *Context,
+        comptime kinds: []const TokenKindTag,
+    ) error{NestingDepthReached}!bool {
+        return try self.skipTokensUntilScope(kinds, self.scopeDelimiterContext());
+    }
+
     /// recover from an UnexpectedToken error (if the err is an UnexpectedToken) using the following
     /// strategy:
     /// * If inside a scope: iterate until then next entry point tokens or if it goes out of the current scope.
@@ -1702,27 +1783,18 @@ const Context = struct {
         self: *Context,
         err: anytype,
         comptime tokens: []const TokenKindTag,
+        scope: usize,
     ) !void {
-        if (err != Error.UnexpectedToken) {
-            return err;
-        }
-
-        self.it.goBack(); // revert the token consumption.
-        if (self.scopeDelimiterContext() > 0) {
-            // NB: Inside a scope, go until you find next entry token or falling outside of the
-            // current scope.
-            _ = try self.skipTokensUntil(tokens);
-        } else {
-            _ = try self.skipTokensUntil(EntryKeywords);
-        }
+        _ = try self.recoverExitsScope(err, tokens, scope);
     }
 
     /// similar to recover but returns whether or not the current scope is exited.
-    /// This is helpful for nested structures such as parsing values, objects, options, etc.
+    /// This is helpful for nested structures such as parsing values, objects, annotations, etc.
     inline fn recoverExitsScope(
         self: *Context,
         err: Error,
         comptime tokens: []const TokenKindTag,
+        scope: usize,
     ) Error!bool {
         if (err != Error.UnexpectedToken) {
             return err;
@@ -1731,10 +1803,14 @@ const Context = struct {
         self.it.goBack(); // revert the token consumption.
         // NB: Inside a scope, go until you find next entry token or falling outside of the
         // current scope.
-        return if (self.scopeDelimiterContext() > 0)
-            self.skipTokensUntil(tokens)
-        else
-            self.skipTokensUntil(EntryKeywords);
+        if (self.scopeDelimiterContext() > 0) {
+            return self.skipTokensUntilScope(tokens, scope);
+        } else {
+            // If we are already in the root scope, skip until some entry keyword.
+            // Unless the starting `scope` is also root, we should consider the scope exited.
+            _ = try self.skipTokensUntil(EntryKeywords);
+            return scope > 0;
+        }
     }
 
     /// similar to handleScopeDelimiter but specifically for comptime and enter tokens.

@@ -51,9 +51,13 @@ pub const Pair = struct {
 pub const AnnotationNode = struct {
     const Flags = packed struct {
         /// extra indicates whether or not the annotation is marked as extra.
-        extra: bool,
+        extra: bool = false,
         /// private means the annotation is marked as private.
-        private: bool,
+        private: bool = false,
+        // headless indicates the node is a root and does not have a prefix key_path.
+        headless: bool = false,
+        // bare means the import uses the bare import syntax.
+        bare: bool = false,
     };
 
     pub const Value = union(enum) {
@@ -74,6 +78,15 @@ pub const AnnotationNode = struct {
 
     /// range captures the entire range of the option.
     range: Range,
+};
+
+/// Most of the annotations use either the headless and modifierless group form or inline values.
+/// This struct is a wrapper just to indicate whether or not a block is used.
+pub const AnnotationGroup = struct {
+    values: []const AnnotationNode,
+    block: bool,
+
+    pub const empty: AnnotationGroup = .{ .values = &.{}, .block = false };
 };
 
 pub const Documentation = struct {
@@ -97,7 +110,7 @@ pub const Constant = struct {
     /// name of the constant.
     name: Identifier,
     /// annotations assigned to the constant.
-    annotations: []const AnnotationNode,
+    annotations: AnnotationGroup,
     /// value is the ranged value of the constant.
     value: RangedLiteral,
     /// range is the boundary of the statement in the source code.

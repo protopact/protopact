@@ -17,11 +17,39 @@ const TestCase = struct {
     expected: []const u8,
 };
 
-fn formatError(writer: *std.Io.Writer, err: parser.PragmaError) !void {
+fn formatError(writer: *std.Io.Writer, err: parser.PragmaError, line_map: pragma.LineMap) !void {
     if (err.location) |loc| {
         switch (loc) {
-            .position => |pos| try writer.print("{d} {s}", .{pos, err.message}),
-            .range => |range| try writer.print("{d}-{d} {s}", .{range.start, range.end, err.message}),
+            .position => |pos| {
+                const line_info: pragma.LineMap.Position = try line_map.resolveOffset(pos);
+                try writer.print("{d}:{d}[{d}] {s}", .{ line_info.line, line_info.column, pos, err.message });
+            },
+            .range => |range| {
+                const start: pragma.LineMap.Position = try line_map.resolveOffset(range.start);
+                const end: pragma.LineMap.Position = try line_map.resolveOffset(range.end);
+                if (end.line != start.line) {
+                    try writer.print("{d}:{d}-{d}:{d}[{d}-{d}] {s} @literal={s}", .{
+                        start.line + 1,
+                        start.column + 1,
+                        end.line + 1,
+                        end.column + 1,
+                        range.start,
+                        range.end,
+                        err.message,
+                        line_map.source[range.start..range.end],
+                    });
+                } else {
+                    try writer.print("{d}:{d}-{d}[{d}-{d}] {s} @literal={s}", .{
+                        start.line + 1,
+                        start.column + 1,
+                        end.column + 1,
+                        range.start,
+                        range.end,
+                        err.message,
+                        line_map.source[range.start..range.end],
+                    });
+                }
+            },
             // .Position => try writer.print("{d}:{d}[{d}] {s} @literal={?s}", .{
             //     loc.Position.line,
             //     loc.Position.column,
@@ -108,6 +136,7 @@ fn runTests(comptime sourceFileName: []const u8, test_options: TestOptions) !voi
 
     var opts = test_options;
     opts.coder_options.line_map = .empty;
+    defer opts.coder_options.line_map.?.deinit(t.allocator);
 
     for (testCases) |tt| {
         if (includedTests.count() > 0) {
@@ -116,11 +145,11 @@ fn runTests(comptime sourceFileName: []const u8, test_options: TestOptions) !voi
             }
             std.debug.print("-- Running Test '{s}'\n", .{tt.name});
         }
-        var testCaseAllocator = std.heap.ArenaAllocator.init(std.testing.allocator);
-        defer testCaseAllocator.deinit();
+        var test_case_allocator = std.heap.ArenaAllocator.init(std.testing.allocator);
+        defer test_case_allocator.deinit();
 
-        try opts.coder_options.line_map.?.update(testCaseAllocator.allocator(), tt.source);
-        const result = try parser.parse(testCaseAllocator.allocator(), tt.source, .{});
+        try opts.coder_options.line_map.?.update(t.allocator, tt.source);
+        const result = try parser.parse(test_case_allocator.allocator(), tt.source, .{});
 
         var output = std.Io.Writer.Allocating.init(allocator.allocator());
         defer output.deinit();
@@ -133,7 +162,7 @@ fn runTests(comptime sourceFileName: []const u8, test_options: TestOptions) !voi
             if (output.written().len > 0) {
                 try output.writer.writeByte('\n');
             }
-            try formatError(&output.writer, err);
+            try formatError(&output.writer, err, opts.coder_options.line_map.?);
         }
 
         try output.writer.flush();
@@ -149,26 +178,16 @@ fn runTests(comptime sourceFileName: []const u8, test_options: TestOptions) !voi
     }
 }
 
-// test "pact" {
-//     try runTests("./data/parser/pact.md", .{
-//         .marshaler = astcoder.YamlMarshaller{
-//             .expandSelectors = true,
-//             .includePact = true,
-//             .includeRange = true,
-//         },
-//         .writeDocumentOnError = false,
-//     });
-// }
-
-// test "import" {
-//     try runTests("./data/parser/import.md", .{
-//         .marshaler = astcoder.YamlMarshaller{
-//             .includeImport = true,
-//             .includeRange = true,
-//         },
-//         .writeDocumentOnError = false,
-//     });
-// }
+test "import" {
+    try runTests("./data/parser/import.md", .{
+        .coder_options = astcoder.Options{
+            .include_import = true,
+            .include_range = true,
+            .exclude_zero_values = true,
+        },
+        .write_document_on_error = false,
+    });
+}
 
 // test "options" {
 //     try runTests("./data/parser/options.md", .{

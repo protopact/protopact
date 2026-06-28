@@ -6,10 +6,8 @@ import 'some/package'
 
 ```yaml
 imports:
-  - alias: ""
-    implicit: false
-    path: "some/package"
-    range: "1:8[7-21]"
+  - path: "some/package"
+    range: "1:8-22[7-21]"
 ```
 
 # double quote
@@ -20,27 +18,24 @@ import "some/package"
 
 ```yaml
 imports:
-  - alias: ""
-    implicit: false
-    path: "some/package"
-    range: "1:8[7-21]"
+  - path: "some/package"
+    range: "1:8-22[7-21]"
 ```
 
 # wildcard
 
 ```pactum
-import _ "some/package"
+import # "some/package"
 ```
 
 ```yaml
 imports:
-  - alias: ""
-    implicit: true
+  - bare: true
     path: "some/package"
-    range: "1:8[7-23]"
+    range: "1:8-24[7-23]"
 ```
 
-# wildcard
+# alias
 
 ```pactum
 import name "some/package"
@@ -49,16 +44,15 @@ import name "some/package"
 ```yaml
 imports:
   - alias: "name"
-    implicit: false
     path: "some/package"
-    range: "1:8[7-26]"
+    range: "1:8-27[7-26]"
 ```
 
 # import group / all flavors
 
 ```pactum
 import (
-  _ "wildcard"
+  #w "wildcard"
   alias "some/package"
 	"regular"
 )
@@ -66,18 +60,15 @@ import (
 
 ```yaml
 imports:
-  - alias: ""
-    implicit: true
+  - alias: "w"
+    bare: true
     path: "wildcard"
-    range: "2:3[11-23]"
+    range: "2:3-16[11-24]"
   - alias: "alias"
-    implicit: false
     path: "some/package"
-    range: "3:3[26-46]"
-  - alias: ""
-    implicit: false
-    path: "regular"
-    range: "4:2[48-57]"
+    range: "3:3-23[27-47]"
+  - path: "regular"
+    range: "4:2-11[49-58]"
 ```
 
 # import number (error)
@@ -87,7 +78,7 @@ import 1.23
 ```
 
 ```yaml
-1:8[7] expected path string @literal=1.23
+1:8-12[7-11] expected path string @literal=1.23
 ```
 
 # import with alias and no package (error)
@@ -97,5 +88,5 @@ import alias
 ```
 
 ```yaml
-0:0[0] unexpected end of file @literal=
+0:0[0] unexpected end of file
 ```
