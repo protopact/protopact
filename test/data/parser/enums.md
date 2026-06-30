@@ -1,87 +1,71 @@
 # one liner
 
-```pactum
+```pragma
 enum Color { Red, Green, Blue }
 ```
 
 ```yaml
-options:
 enums:
   - name: "Color"
-    range: "1:6[5-31]"
-    options:
+    range: "1:6-32[5-31]"
     variants:
       - name: "Red"
-        range: "1:14[13-16]"
-        value: null
-        options:
+        range: "1:14-17[13-16]"
       - name: "Green"
-        range: "1:19[18-23]"
-        value: null
-        options:
+        range: "1:19-24[18-23]"
       - name: "Blue"
-        range: "1:26[25-29]"
-        value: null
-        options:
+        range: "1:26-30[25-29]"
 ```
 
-# value assignment and variant options
+# value assignment and variant annotations
 
-```pactum
-enum Color { Red = 1, Green #required, Blue = 51 p#ignore r#"meshapi.io:name" = "b" }
+```pragma
+enum Color { Red = 1, Green #required, Blue = 51 p#ignore x#"meshapi.io:name" = "b" }
 ```
 
 ```yaml
-options:
 enums:
   - name: "Color"
-    range: "1:6[5-85]"
-    options:
+    range: "1:6-86[5-85]"
     variants:
       - name: "Red"
-        range: "1:14[13-20]"
+        range: "1:14-21[13-20]"
         value: 1
-        options:
       - name: "Green"
-        range: "1:23[22-37]"
-        value: null
-        options:
-          - raw: false
-            private: false
-            range: "1:30[29-37]"
-            selector:
+        range: "1:23-38[22-37]"
+        annotations:
+          - range: "1:30-38[29-37]"
+            key_path:
               content: "required"
-              range: "1:30[29-37]"
+              range: "1:30-38[29-37]"
             value:
-              range: "1:30[29-37]"
+              range: "1:30-38[29-37]"
               data: true
       - name: "Blue"
-        range: "1:40[39-83]"
+        range: "1:40-84[39-83]"
         value: 51
-        options:
-          - raw: false
-            private: true
-            range: "1:52[51-57]"
-            selector:
+        annotations:
+          - private: true
+            range: "1:52-58[51-57]"
+            key_path:
               content: "ignore"
-              range: "1:52[51-57]"
+              range: "1:52-58[51-57]"
             value:
-              range: "1:52[51-57]"
+              range: "1:52-58[51-57]"
               data: true
-          - raw: true
-            private: false
-            range: "1:61[60-83]"
-            selector:
+          - extra: true
+            range: "1:61-84[60-83]"
+            key_path:
               content: "meshapi.io:name"
-              range: "1:61[60-77]"
+              range: "1:61-78[60-77]"
             value:
-              range: "1:81[80-83]"
+              range: "1:81-84[80-83]"
               data: "b"
 ```
 
-# enum options
+# enum annotations
 
-```pactum
+```pragma
 enum Color {
   p#openapi {
 		description = "Represents an RGB color."
@@ -99,74 +83,58 @@ enum Color {
 ```
 
 ```yaml
-options:
 enums:
   - name: "Color"
-    range: "1:6[5-149]"
-    options:
-      - raw: false
-        private: true
-        range: "2:5[17-72]"
-        selector:
+    range: "1:6-14:2[5-149]"
+    annotations:
+      - private: true
+        range: "2:3-4:3[15-72]"
+        key_path:
           content: "openapi"
-          range: "2:5[17-24]"
+          range: "2:5-12[17-24]"
         block:
-          - raw: false
-            private: false
-            range: "3:3[29-69]"
-            selector:
+          - range: "3:3-43[29-69]"
+            key_path:
               content: "description"
-              range: "3:3[29-40]"
+              range: "3:3-14[29-40]"
             value:
-              range: "3:17[43-69]"
+              range: "3:17-43[43-69]"
               data: "Represents an RGB color."
-      - raw: false
-        private: false
-        range: "6:3[76-103]"
-        selector:
+      - range: "6:2-8:3[75-103]"
+        key_path:
           content: "cpp"
-          range: "6:3[76-79]"
+          range: "6:3-6[76-79]"
         block:
-          - raw: false
-            private: false
-            range: "7:3[84-100]"
-            selector:
+          - range: "7:3-19[84-100]"
+            key_path:
               content: "prefix"
-              range: "7:3[84-90]"
+              range: "7:3-9[84-90]"
             value:
-              range: "7:12[93-100]"
+              range: "7:12-19[93-100]"
               data: "COLOR"
     variants:
       - name: "Unknown"
-        range: "10:2[106-125]"
+        range: "10:2-21[106-125]"
         value: 0
-        options:
-          - raw: false
-            private: false
-            range: "10:15[119-125]"
-            selector:
+        annotations:
+          - range: "10:15-21[119-125]"
+            key_path:
               content: "ignore"
-              range: "10:15[119-125]"
+              range: "10:15-21[119-125]"
             value:
-              range: "10:15[119-125]"
+              range: "10:15-21[119-125]"
               data: true
       - name: "Red"
-        range: "11:2[128-131]"
-        value: null
-        options:
+        range: "11:2-5[128-131]"
       - name: "Blue"
-        range: "12:2[134-138]"
-        value: null
-        options:
+        range: "12:2-6[134-138]"
       - name: "Green"
-        range: "13:2[141-146]"
-        value: null
-        options:
+        range: "13:2-7[141-146]"
 ```
 
 # enum group
 
-```pactum
+```pragma
 enum ()
 enum (
 	Color { Red, Green, Blue }
@@ -180,112 +148,90 @@ enum (
 ```
 
 ```yaml
-options:
 enums:
   - name: "Color"
-    range: "3:2[16-42]"
-    options:
+    range: "3:2-28[16-42]"
     variants:
       - name: "Red"
-        range: "3:10[24-27]"
-        value: null
-        options:
+        range: "3:10-13[24-27]"
       - name: "Green"
-        range: "3:15[29-34]"
-        value: null
-        options:
+        range: "3:15-20[29-34]"
       - name: "Blue"
-        range: "3:22[36-40]"
-        value: null
-        options:
+        range: "3:22-26[36-40]"
   - name: "Mood"
-    range: "4:2[44-94]"
-    options:
+    range: "4:2-9:3[44-94]"
     variants:
       - name: "Unsure"
-        range: "5:3[53-63]"
+        range: "5:3-13[53-63]"
         value: 0
-        options:
       - name: "Happy"
-        range: "6:3[67-72]"
-        value: null
-        options:
+        range: "6:3-8[67-72]"
       - name: "Sad"
-        range: "7:3[76-79]"
-        value: null
-        options:
+        range: "7:3-6[76-79]"
       - name: "Excited"
-        range: "8:3[83-90]"
-        value: null
-        options:
+        range: "8:3-10[83-90]"
 ```
 
-# block options
+# block annotations
 
-```pactum
+```pragma
 enum Color {
 	WithComma {
 		p#shared_option = 1
 		regular_option = false
 	},
 	WithoutComma = 2 {
-		r#"meshapi:meta" = "something"
+		x#"meshapi:meta" = "something"
 	}
 	LastVariant = 3
 }
 ```
 
 ```yaml
-options:
 enums:
   - name: "Color"
-    range: "1:6[5-151]"
-    options:
+    range: "1:6-10:2[5-151]"
     variants:
       - name: "WithComma"
-        range: "2:2[14-75]"
-        value: null
-        options:
-          - raw: false
-            private: true
-            range: "3:5[30-47]"
-            selector:
-              content: "shared_option"
-              range: "3:5[30-43]"
-            value:
-              range: "3:21[46-47]"
-              data: 1
-          - raw: false
-            private: false
-            range: "4:3[50-72]"
-            selector:
-              content: "regular_option"
-              range: "4:3[50-64]"
-            value:
-              range: "4:20[67-72]"
-              data: false
+        range: "2:2-5:3[14-75]"
+        annotations:
+          block:
+            - private: true
+              range: "3:5-22[30-47]"
+              key_path:
+                content: "shared_option"
+                range: "3:5-18[30-43]"
+              value:
+                range: "3:21-22[46-47]"
+                data: 1
+            - range: "4:3-25[50-72]"
+              key_path:
+                content: "regular_option"
+                range: "4:3-17[50-64]"
+              value:
+                range: "4:20-25[67-72]"
+                data: false
       - name: "WithoutComma"
-        range: "6:2[78-132]"
+        range: "6:2-8:3[78-132]"
         value: 2
-        options:
-          - raw: true
-            private: false
-            range: "7:5[101-129]"
-            selector:
-              content: "meshapi:meta"
-              range: "7:5[101-115]"
-            value:
-              range: "7:22[118-129]"
-              data: "something"
+        annotations:
+          block:
+            - extra: true
+              range: "7:5-33[101-129]"
+              key_path:
+                content: "meshapi:meta"
+                range: "7:5-19[101-115]"
+              value:
+                range: "7:22-33[118-129]"
+                data: "something"
       - name: "LastVariant"
-        range: "9:2[134-149]"
+        range: "9:2-17[134-149]"
         value: 3
-        options:
 ```
 
 # invalid tag
 
-```pactum
+```pragma
 enum Color {
 	Red = -1 #ignore,
 	Blue = 9999999999999999
@@ -293,30 +239,84 @@ enum Color {
 ```
 
 ```txt
-options:
 enums:
   - name: "Color"
-    range: "1:6[5-58]"
-    options:
+    range: "1:6-4:2[5-58]"
     variants:
       - name: "Red"
-        range: "2:2[14-30]"
-        value: null
-        options:
-          - raw: false
-            private: false
-            range: "2:12[24-30]"
-            selector:
+        range: "2:2-18[14-30]"
+        annotations:
+          - range: "2:12-18[24-30]"
+            key_path:
               content: "ignore"
-              range: "2:12[24-30]"
+              range: "2:12-18[24-30]"
             value:
-              range: "2:12[24-30]"
+              range: "2:12-18[24-30]"
               data: true
       - name: "Blue"
-        range: "3:2[33-56]"
-        value: null
-        options:
+        range: "3:2-25[33-56]"
 
-2:8[20-22] enum value must be a positive integer from 0 to 2^32-1 @literal=-1
-3:9[40-56] enum value must be a positive integer from 0 to 2^32-1 @literal=9999999999999999
+2:8-10[20-22] enum value must be a positive integer from 0 to 2^32-1 @literal=-1
+3:9-25[40-56] enum value must be a positive integer from 0 to 2^32-1 @literal=9999999999999999
+```
+
+# recovery
+
+```pragma
+enum Color {
+	Red = -1 #ignore {
+        54
+    },
+    whatever
+	Blue = 9999999999999999,
+    Green,
+}
+
+enum (
+    Kind {
+        User Admin ServiceAccount
+    }
+
+    AnotherOne {
+        This, One, Works
+    }
+)
+```
+
+```txt
+enums:
+  - name: "Color"
+    range: "1:6-8:2[5-102]"
+    variants:
+      - name: "Red"
+        range: "2:2-4:6[14-49]"
+        annotations:
+          - range: "2:11-4:6[23-49]"
+            key_path:
+              content: "ignore"
+              range: "2:12-18[24-30]"
+            block:
+      - name: "whatever"
+        range: "5:5-6:25[55-88]"
+      - name: "Green"
+        range: "7:5-10[94-99]"
+  - name: "Kind"
+    range: "11:5-13:6[115-161]"
+    variants:
+      - name: "User"
+        range: "12:9-13:6[130-161]"
+  - name: "AnotherOne"
+    range: "15:5-17:6[167-210]"
+    variants:
+      - name: "This"
+        range: "16:9-13[188-192]"
+      - name: "One"
+        range: "16:15-18[194-197]"
+      - name: "Works"
+        range: "16:20-25[199-204]"
+
+2:8-10[20-22] enum value must be a positive integer from 0 to 2^32-1 @literal=-1
+3:9-11[41-43] expected annotation key path or string @literal=54
+6:2-6[65-69] expected annotation modifier or end of statement @literal=Blue
+12:14-19[135-140] expected annotation modifier or end of statement @literal=Admin
 ```

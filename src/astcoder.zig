@@ -438,9 +438,9 @@ const Context = struct {
             try self.writeValue(LiteralNone, .{});
         }
 
-        if (variant.annotations.len > 0 or !self.opts.exclude_zero_values) {
+        if (variant.annotations.values.len > 0 or !self.opts.exclude_zero_values) {
             try self.writeKey("annotations");
-            try self.writeAnnotations(variant.annotations, false);
+            try self.writeAnnotationGroup(&variant.annotations);
         }
     }
 

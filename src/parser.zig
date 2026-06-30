@@ -1,4 +1,7 @@
-// TODO: Use group ID to learn if a decl is inside a paran group.
+// TODO: * Use group ID to learn if a decl is inside a paran group.
+//       * Support bare annotations
+//       * Support @ref
+//       * Support profiles
 
 const std = @import("std");
 const tokenizer = @import("tokenizer.zig");
@@ -268,7 +271,7 @@ const Context = struct {
                     break :option self.processAnnotation();
                 },
                 .Const => self.processConst(),
-                // .Enum => self.processEnum(),
+                .Enum => self.processEnum(),
                 // .Struct => self.processMessage(),
                 // .Annotation => self.processOptionDefinition(),
                 // .Protocol => self.processInterface(),
@@ -394,112 +397,121 @@ const Context = struct {
         }
     }
 
-    // fn processEnum(self: *Context) Error!void {
-    //     try self.processGroup(processEnumBody);
-    // }
-    //
-    // fn processEnumBody(self: *Context) Error!void {
-    //     const EnumEntryRecoveryPoints: []const TokenKindTag = &.{ .Documentation, .Identifier };
-    //     const documentation = try self.parseDocumentationGroupForCurrentPosition();
-    //     const nameToken = self.consumeRequiredToken(.Identifier, "enum name") catch |err| {
-    //         return self.recover(err, EnumEntryRecoveryPoints, false);
-    //     };
-    //     _ = self.consumeRequiredToken(.LeftCurlyBrace, "{") catch |err| {
-    //         return self.recover(err, EnumEntryRecoveryPoints, false);
-    //     };
-    //
-    //     var options = StackFallbackArray(ast.OptionAssignmentNode, 20).init(self.transient_allocator);
-    //     var variants = StackFallbackArray(ast.EnumVariant, 20).init(self.transient_allocator);
-    //     while (true) {
-    //         const token = try self.peekNextOrError();
-    //         switch (token.kind) {
-    //             .Comment => self.consume(),
-    //             .Hash, .ExtraHash, .PrivateHash => if (self.parseOption(false, null)) |v| {
-    //                 try options.append(v.data);
-    //                 if (v.scope_exited) break;
-    //             } else |err| if (try self.recoverExitsScope(err, EnumBodyRecoveryPoints))
-    //                 break,
-    //             .Identifier => if (self.parseEnumVariant()) |v| {
-    //                 try variants.append(v.data);
-    //                 if (v.scope_exited) break;
-    //             } else |err| if (try self.recoverExitsScope(err, EnumBodyRecoveryPoints))
-    //                 break,
-    //             .Documentation => try self.captureDocumentationGroup(),
-    //             .RightCurlyBrace => {
-    //                 self.consume();
-    //                 self.popScopeDelimiter(.CurlyBrace);
-    //                 break;
-    //             },
-    //             .Comma => self.consume(),
-    //             else => {
-    //                 self.addError(PragmaError.unexpectedToken(&token));
-    //                 if (try self.skipTokensUntil(EnumBodyRecoveryPoints, false))
-    //                     break;
-    //             },
-    //         }
-    //         _ = self.consumeOptionalTokenBool(.Comma);
-    //     }
-    //
-    //     try self.enums.append(self.allocator, ast.Enum{
-    //         .name = ast.Identifier{
-    //             .value = try self.copyString(nameToken.literal),
-    //             .range = nameToken.range(),
-    //         },
-    //         .variants = try variants.toOwnedSlice(self.allocator),
-    //         .documentation = documentation,
-    //         .annotations = try options.toOwnedSlice(self.allocator),
-    //         .range = .{ .start = nameToken.position, .endOffset = self.it.currentAssumeSafe().endOffset() },
-    //     });
-    // }
+    fn processEnum(self: *Context) Error!void {
+        const recovery_points: []const TokenKindTag = &.{ .Documentation, .Identifier };
+        try self.processGroupNew(recovery_points, processEnumBody);
+    }
 
-    // inline fn buildEnumVariant(
-    //     self: *Context,
-    //     nameToken: tokenizer.Token,
-    //     value: ?u32,
-    //     documentation: ?ast.Documentation,
-    //     options: []const ast.OptionAssignmentNode,
-    // ) Allocator.Error!ast.EnumVariant {
-    //     return .{
-    //         .name = ast.Identifier{
-    //             .value = try self.copyString(nameToken.literal),
-    //             .range = nameToken.range(),
-    //         },
-    //         .value = value,
-    //         .documentation = documentation,
-    //         .annotations = options,
-    //         .range = .{
-    //             .start = nameToken.position,
-    //             .endOffset = self.it.currentAssumeSafe().endOffset(),
-    //         },
-    //     };
-    // }
+    fn processEnumBody(self: *Context) Error!void {
+        const recovery_points: []const TokenKindTag = &.{ .Documentation, .Identifier };
+        const documentation = try self.consumeStagedDocumentation();
+        const name_token = try self.consumeRequiredToken(.Identifier, "enum name");
+        _ = try self.consumeRequiredToken(.LeftCurlyBrace, "{");
+        const current_scope = self.scopeDelimiterContext();
 
-    // fn parseEnumVariant(self: *Context) Error!ParseResult(ast.EnumVariant) {
-    //     const documentation = try self.consumeStagedDocumentationFor(self.it.currentAssumeSafe().position);
-    //     const nameToken = try self.consumeRequiredToken(.Identifier, "enum value");
-    //     var value: ?u32 = null;
-    //
-    //     if (self.consumeOptionalTokenBool(.Equal)) {
-    //         // explicit assignment.
-    //         if (self.consumeRequiredToken(.Integer, "enum variant numerical value")) |valueToken| {
-    //             if (std.math.cast(u32, valueToken.kind.Integer)) |tag| {
-    //                 value = tag;
-    //             } else self.addError(PragmaError.enumVariantNumericalError(&valueToken));
-    //         } else |err| if (try self.recoverExitsScope(err, &.{ .RawHash, .Hash, .PrivateHash, .Comma })) {
-    //             return .initScopeExited(
-    //                 try self.buildEnumVariant(nameToken, null, documentation, &.{}),
-    //             );
-    //         }
-    //     }
-    //
-    //     return if (self.parseItemOptions(.Comma)) |v| .init(
-    //         try self.buildEnumVariant(nameToken, value, documentation, v.data),
-    //         v.scope_exited,
-    //     ) else |err| .init(
-    //         try self.buildEnumVariant(nameToken, value, documentation, &.{}),
-    //         try self.recoverExitsScope(err, EnumBodyRecoveryPoints),
-    //     );
-    // }
+        var annotations = StackFallbackArray(ast.AnnotationNode, 32).init(self.transient_allocator);
+        var variants = StackFallbackArray(ast.EnumVariant, 32).init(self.transient_allocator);
+
+        while (true) {
+            const token = try self.peekNextOrError();
+            switch (token.kind) {
+                .Hash, .ExtraHash, .PrivateHash, .ExtraMode, .PrivateMode, .PrivateExtraMode => if (self.parseAnnotation(false, null)) |v| {
+                    try annotations.append(v.data);
+                    if (v.needs_recovery and try self.skipTokensUntilScope(recovery_points, current_scope)) {
+                        break;
+                    }
+                } else |err| if (try self.recoverExitsScope(err, recovery_points, current_scope)) {
+                    break;
+                },
+                .Identifier => if (self.parseEnumVariant()) |v| {
+                    try variants.append(v.data);
+                    if (v.needs_recovery and try self.skipTokensUntilScope(recovery_points, current_scope)) {
+                        break;
+                    }
+                } else |err| if (try self.recoverExitsScope(err, recovery_points, current_scope)) {
+                    break;
+                },
+                .Documentation => try self.stageDocumentationGroup(),
+                .RightCurlyBrace => {
+                    self.consume();
+                    self.popScopeDelimiter(.CurlyBrace);
+                    break;
+                },
+                .Comma => self.consume(),
+                else => {
+                    self.addError(PragmaError.unexpectedToken(&token));
+                    if (try self.skipTokensUntilScope(recovery_points, current_scope)) {
+                        break;
+                    }
+                },
+            }
+        }
+        
+        try self.enums.append(self.allocator, ast.Enum{
+            .name = ast.Identifier{
+                .value = try self.copyString(name_token.literal),
+                .range = name_token.range,
+            },
+            .variants = try variants.toOwnedSlice(self.allocator),
+            .documentation = documentation,
+            .annotations = try annotations.toOwnedSlice(self.allocator),
+            .range = .{ .start = name_token.range.start, .end = self.currentRangeAssumeSafe().end },
+        });
+    }
+
+    inline fn buildEnumVariant(
+        self: *Context,
+        name_token: tokenizer.Token,
+        value: ?u32,
+        documentation: ?ast.Documentation,
+        annotations: ast.AnnotationGroup,
+    ) Allocator.Error!ast.EnumVariant {
+        return .{
+            .name = ast.Identifier{
+                .value = try self.copyString(name_token.literal),
+                .range = name_token.range,
+            },
+            .value = value,
+            .documentation = documentation,
+            .annotations = annotations,
+            .range = .{
+                .start = name_token.range.start,
+                .end = self.currentRangeAssumeSafe().end,
+            },
+        };
+    }
+
+    fn parseEnumVariant(self: *Context) Error!ParseResult(ast.EnumVariant) {
+        const recovery_points: []const TokenKindTag = &.{
+            .Hash, .ExtraHash, .PrivateHash, .ExtraMode, .PrivateMode, .PrivateExtraMode, .Comma
+        };
+        const documentation = try self.consumeStagedDocumentation();
+        const name_token = try self.consumeRequiredToken(.Identifier, "enum value");
+        const current_scope = self.scopeDelimiterContext();
+        var value: ?u32 = null;
+
+        if (self.consumeOptionalTokenBool(.Equal)) {
+            // explicit assignment.
+            if (self.consumeRequiredToken(.Integer, "enum variant numerical value")) |value_token| {
+                if (std.math.cast(u32, value_token.kind.Integer)) |tag| {
+                    value = tag;
+                } else self.addError(PragmaError.enumVariantNumericalError(&value_token));
+            } else |err| if (try self.recoverExitsScope(err, recovery_points, current_scope)) {
+                return .init(
+                    try self.buildEnumVariant(name_token, null, documentation, .empty),
+                    true,
+                );
+            }
+        }
+
+        return if (self.parseItemAnnotations(.Comma)) |v| .init(
+            try self.buildEnumVariant(name_token, value, documentation, v.data),
+            v.needs_recovery,
+        ) else |err| .init(
+            try self.buildEnumVariant(name_token, value, documentation, .empty),
+            try self.recoverExitsScope(err, recovery_points, current_scope),
+        );
+    }
 
     // fn processMessage(self: *Context) Error!void {
     //     try self.processGroup(processMessageBody);
@@ -773,35 +785,47 @@ const Context = struct {
     //     }, result.scope_exited) else |err| err;
     // }
     //
-    // fn parseItemOptions(
-    //     self: *Context,
-    //     comptime terminationToken: TokenKindTag,
-    // ) Error!ParseResult([]ast.OptionAssignmentNode) {
-    //     const RecoveryPoints: []const TokenKindTag = &.{ terminationToken, .RawHash, .Hash, .PrivateHash };
-    //
-    //     if (self.nextTokenIs(.LeftCurlyBrace)) {
-    //         return self.parseAnnotationBlock();
-    //     }
-    //
-    //     var values = StackFallbackArray(ast.OptionAssignmentNode, 10).init(self.transient_allocator);
-    //     const scopeExited = blk: {
-    //         while (true) {
-    //             const token = self.it.peek(1) orelse break :blk false;
-    //             if (token.kind == .RightCurlyBrace or token.kind == terminationToken) {
-    //                 break :blk false;
-    //             }
-    //             if (self.parseOption(false, null)) |v| {
-    //                 try values.append(v.data);
-    //                 if (v.scope_exited) break :blk true;
-    //             } else |err| if (try self.recoverExitsScope(err, RecoveryPoints))
-    //                 break :blk true
-    //             else if (!self.nextTokenIsOneOf(RecoveryPoints)) break :blk false;
-    //             // NB: If next token is not an option token, exit out of option parsing loop.
-    //         }
-    //     };
-    //
-    //     return .initValue(try values.toOwnedSlice(self.allocator), scopeExited);
-    // }
+
+    /// Parse annotations belonging to an item (fields, functions, etc.).
+    fn parseItemAnnotations(
+        self: *Context,
+        comptime terminationToken: TokenKindTag,
+    ) Error!ParseResult(ast.AnnotationGroup) {
+        const recovery_points: []const TokenKindTag = &.{
+            terminationToken, .Hash, .ExtraHash, .PrivateHash, .ExtraMode, .PrivateMode, .PrivateExtraMode
+        };
+        const current_scope = self.scopeDelimiterContext();
+
+        if (self.nextTokenIs(.LeftCurlyBrace)) {
+            if (self.parseAnnotationBlock()) |v| {
+                return .init(ast.AnnotationGroup{ .block = true, .values = v.data }, v.needs_recovery);
+            } else |err| return err;
+        }
+
+        var values = StackFallbackArray(ast.AnnotationNode, 16).init(self.transient_allocator);
+        const parent_might_need_recovery = blk: {
+            while (true) {
+                const token = self.it.peek(1) orelse break :blk false;
+                if (token.kind == .RightCurlyBrace or token.kind == terminationToken) {
+                    break :blk false;
+                }
+                if (self.parseAnnotation(false, null)) |v| {
+                    try values.append(v.data);
+                    if (v.needs_recovery) {
+                        break :blk true;
+                    }
+                } else |err| if (try self.recoverExitsScope(err, recovery_points, current_scope)) {
+                    break :blk true;
+                } else if (!self.nextTokenIsOneOf(recovery_points)) break :blk false;
+                // NB: If next token is not an option token, exit out of option parsing loop.
+            }
+        };
+
+        return .init(.{
+            .block = false,
+            .values = try values.toOwnedSlice(self.allocator),
+        }, parent_might_need_recovery and (self.scopeDelimiterContext() != current_scope));
+    }
 
     // fn processOptionDefinition(self: *Context) Error!void {
     //     const start = self.it.currentAssumeSafe().position;
@@ -1149,7 +1173,7 @@ const Context = struct {
                 return .{ .private = true };
             },
             else => if (needs_hash_prefix) {
-                self.addError(PragmaError.expectToken(&token, "option setting modifier or end of statement"));
+                self.addError(PragmaError.expectToken(&token, "annotation modifier or end of statement"));
                 self.consume();
                 return Error.UnexpectedToken;
             } else return .default,
@@ -1199,7 +1223,7 @@ const Context = struct {
                         },
                         .profiles = modifiers.profiles,
                     },
-                    v.needs_recovery and (self.scopeDelimiterContext() + 1 != current_scope),
+                    v.needs_recovery and (self.scopeDelimiterContext() != current_scope),
                 ) else |err| err;
             },
             .Equal => {
@@ -1237,7 +1261,7 @@ const Context = struct {
     }
 
     fn parseAnnotationBlock(self: *Context) Error!ParseResult([]ast.AnnotationNode) {
-        const AnnotationBlockRecoveryPoints: []const TokenKindTag = &.{
+        const recovery_points: []const TokenKindTag = &.{
             .Comma,
             .Identifier,
             .String,
@@ -1263,9 +1287,8 @@ const Context = struct {
                         if (v.needs_recovery) {
                             break :blk true;
                         }
-                    } else |err| {
-                        if (try self.recoverExitsScope(err, AnnotationBlockRecoveryPoints, current_scope))
-                            break :blk true;
+                    } else |err| if (try self.recoverExitsScope(err, recovery_points, current_scope)) {
+                        break :blk true;
                     },
                 }
             }
@@ -1726,8 +1749,8 @@ const Context = struct {
         comptime kinds: []const TokenKindTag,
         scope: usize,
     ) error{NestingDepthReached}!bool {
-        if (try self.handleScopeDelimiterRecovery(self.it.currentAssumeSafe().kind, scope)) {
-            self.consume();
+        // If the scope is already exited, return early.
+        if (self.scopeDelimiterContext() < scope) {
             return true;
         }
         while (true) {

@@ -202,17 +202,18 @@ test "constants" {
     });
 }
 
-// test "enums" {
-//     try runTests("./data/parser/enums.md", .{
-//         .marshaler = astcoder.YamlMarshaller{
-//             .includeOptionAssignments = true,
-//             .includeEnums = true,
-//             .includeRange = true,
-//             .includeDocumentation = true,
-//         },
-//         .writeDocumentOnError = true,
-//     });
-// }
+test "enums" {
+    try runTests("./data/parser/enums.md", .{
+        .coder_options = astcoder.Options{
+            .include_annotations = true,
+            .include_enums = true,
+            .include_range = true,
+            .include_documentation = true,
+            .exclude_zero_values = true,
+        },
+        .write_document_on_error = true,
+    });
+}
 
 // test "messages" {
 //     try runTests("./data/parser/messages.md", .{

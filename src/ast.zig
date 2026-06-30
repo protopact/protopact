@@ -126,7 +126,7 @@ pub const EnumVariant = struct {
     /// optional explicit value assignment.
     value: ?u32,
     /// options assigned to the constant.
-    annotations: []const AnnotationNode,
+    annotations: AnnotationGroup,
     /// range is the boundary of the statement in the source code.
     range: Range,
     /// captured documentation for the variant.
