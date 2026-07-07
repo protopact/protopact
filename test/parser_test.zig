@@ -239,17 +239,18 @@ test "structs" {
 //     });
 // }
 
-// test "interfaces" {
-//     try runTests("./data/parser/interfaces.md", .{
-//         .marshaler = astcoder.YamlMarshaller{
-//             .includeOptionAssignments = true,
-//             .includeRange = true,
-//             .includeInterfaces = true,
-//             .includeDocumentation = true,
-//         },
-//         .writeDocumentOnError = true,
-//     });
-// }
+test "protocols" {
+    try runTests("./data/parser/protocols.md", .{
+        .coder_options = astcoder.Options{
+            .exclude_zero_values = true,
+            .include_range = true,
+            .include_protocols = true,
+            .include_documentation = true,
+            .include_annotations = true,
+        },
+        .write_document_on_error = true,
+    });
+}
 
 // test "documentation" {
 //     try runTests("./data/parser/documentation.md", .{

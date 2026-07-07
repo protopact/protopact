@@ -702,9 +702,9 @@ const Context = struct {
             try self.writeValue("{s}", .{LiteralNone});
         }
 
-        if (func.annotations.len > 0 or !self.opts.exclude_zero_values) {
+        if (func.annotations.values.len > 0 or !self.opts.exclude_zero_values) {
             try self.writeKey("annotations");
-            try self.writeAnnotations(func.annotations, false);
+            try self.writeAnnotationGroup(&func.annotations);
         }
     }
 

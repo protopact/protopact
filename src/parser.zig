@@ -274,7 +274,7 @@ const Context = struct {
                 .Enum => self.processEnum(),
                 .Struct => self.processStruct(),
                 // .Annotation => self.processOptionDefinition(),
-                // .Protocol => self.processInterface(),
+                .Protocol => self.processProtocol(),
                 .Documentation => documentation: {
                     // NB: Special case where we need to consume the first token itself.
                     self.it.goBack();
@@ -915,146 +915,155 @@ const Context = struct {
     //     }
     // }
 
-    // fn processInterface(self: *Context) Error!void {
-    //     try self.processGroup(processInterfaceBody);
-    // }
-    //
-    // fn processInterfaceBody(self: *Context) Error!void {
-    //     const InterfaceRecoveryPoints: []const TokenKindTag = &.{ .Interface, .Documentation };
-    //     const documentation = try self.parseDocumentationGroupForCurrentPosition();
-    //     const nameToken = self.consumeRequiredToken(.Identifier, "interface name") catch |err|
-    //         return self.recover(err, InterfaceRecoveryPoints, true);
-    //
-    //     _ = self.consumeRequiredToken(.LeftCurlyBrace, "") catch |err|
-    //         return self.recover(err, InterfaceRecoveryPoints, false);
-    //
-    //     var funcs = StackFallbackArray(ast.Func, 40).init(self.transient_allocator);
-    //     var options = StackFallbackArray(ast.OptionAssignmentNode, 20).init(self.transient_allocator);
-    //
-    //     while (true) {
-    //         const token = try self.peekNextOrError();
-    //         switch (token.kind) {
-    //             .Semicolon, .Comma, .Comment => self.consume(),
-    //             .Hash, .PrivateHash, .ExtraHash => if (self.parseOption(false, null)) |v| {
-    //                 try options.append(v.data);
-    //                 if (v.scope_exited) break;
-    //             } else |err| if (try self.recoverExitsScope(err, InterfaceBodyRecoveryPoints))
-    //                 break,
-    //             .Documentation => try self.captureDocumentationGroup(),
-    //             .Identifier => if (self.parseFunc()) |v| {
-    //                 try funcs.append(v.data);
-    //                 if (v.scope_exited) break;
-    //             } else |err| if (try self.recoverExitsScope(err, &.{.Semicolon}))
-    //                 break,
-    //             .RightCurlyBrace => {
-    //                 self.consume();
-    //                 self.popScopeDelimiter(.CurlyBrace);
-    //                 break;
-    //             },
-    //             else => {
-    //                 self.addError(PragmaError.unexpectedToken(&token));
-    //                 if (try self.skipTokensUntil(InterfaceBodyRecoveryPoints)) {
-    //                     break;
-    //                 }
-    //             },
-    //         }
-    //     }
-    //
-    //     try self.protocols.append(self.allocator, ast.Protocol{
-    //         .name = ast.Identifier{
-    //             .value = try self.copyString(nameToken.literal),
-    //             .range = nameToken.range(),
-    //         },
-    //         .funcs = try funcs.toOwnedSlice(self.allocator),
-    //         .documentation = documentation,
-    //         .annotations = try options.toOwnedSlice(self.allocator),
-    //         .range = ast.Range{
-    //             .start = nameToken.position,
-    //             .endOffset = self.it.currentAssumeSafe().endOffset(),
-    //         },
-    //     });
-    // }
+    fn processProtocol(self: *Context) Error!void {
+        const recovery_points: []const TokenKindTag = &.{ .Identifier, .Documentation };
+        try self.processGroupNew(recovery_points, processProtocolBody);
+    }
 
-    // inline fn buildFunc(
-    //     self: *Context,
-    //     nameToken: tokenizer.Token,
-    //     options: []ast.OptionAssignmentNode,
-    //     input: ?ast.FuncArg,
-    //     output: ?ast.FuncArg,
-    //     documentation: ?ast.Documentation,
-    //     tag: ?u16,
-    // ) Allocator.Error!ast.Func {
-    //     return ast.Func{
-    //         .name = ast.Identifier{
-    //             .value = try self.copyString(nameToken.literal),
-    //             .range = nameToken.range(),
-    //         },
-    //         .annotations = options,
-    //         .input = input,
-    //         .output = output,
-    //         .documentation = documentation,
-    //         .tag = tag,
-    //         .range = .{
-    //             .start = nameToken.position,
-    //             .endOffset = self.it.currentAssumeSafe().endOffset(),
-    //         },
-    //     };
-    // }
-    //
-    // fn parseFunc(self: *Context) Error!ParseResult(ast.Func) {
-    //     const documentation = try self.consumeStagedDocumentationFor(self.it.currentAssumeSafe().position);
-    //     const nameToken = try self.consumeRequiredToken(.Identifier, "func name");
-    //     _ = try self.consumeRequiredToken(.LeftParan, "(");
-    //     var input: ?ast.FuncArg = null;
-    //     var output: ?ast.FuncArg = null;
-    //
-    //     // Input
-    //     if (!self.consumeOptionalExitScopeTokenBool(.RightParan)) {
-    //         input = try self.parseFuncArg();
-    //         _ = try self.consumeRequiredToken(.RightParan, ")");
-    //     }
-    //
-    //     // Output
-    //     if (self.consumeOptionalTokenBool(.Return)) {
-    //         if (try self.consumeOptionalEnterScopeTokenBool(.LeftParan)) {
-    //             if (self.nextTokenIs(.Identifier)) {
-    //                 output = try self.parseFuncArg();
-    //             }
-    //             _ = try self.consumeRequiredToken(.RightParan, ")");
-    //         } else {
-    //             output = try self.parseFuncArg();
-    //         }
-    //     }
-    //
-    //     // Optional Tag
-    //     var tag: ?u16 = null;
-    //     if (self.consumeOptionalTokenBool(.Equal)) {
-    //         const tagToken = try self.consumeRequiredToken(.Integer, "func tag");
-    //         if (std.math.cast(u16, tagToken.kind.Integer)) |tagValue| {
-    //             if (tagValue == 0) {
-    //                 self.addError(PragmaError.funcTagNumericalError(&tagToken));
-    //             }
-    //             tag = tagValue;
-    //         } else self.addError(PragmaError.funcTagNumericalError(&tagToken));
-    //     }
-    //
-    //     return if (self.parseItemOptions(.Semicolon)) |v| .initValue(
-    //         try self.buildFunc(nameToken, v.data, input, output, documentation, tag),
-    //         v.scope_exited,
-    //     ) else |err| .initValue(
-    //         try self.buildFunc(nameToken, &.{}, input, output, documentation, tag),
-    //         try self.recoverExitsScope(err, InterfaceBodyRecoveryPoints),
-    //     );
-    // }
-    //
-    // fn parseFuncArg(self: *Context) Error!ast.FuncArg {
-    //     const streaming = self.consumeOptionalTokenBool(.Stream);
-    //     const name = try self.parseSelector();
-    //     return ast.FuncArg{
-    //         .name = name,
-    //         .streaming = streaming,
-    //     };
-    // }
+    fn processProtocolBody(self: *Context) Error!void {
+        const recovery_points: []const TokenKindTag = &.{ .Identifier, .Documentation };
+        const doc = try self.consumeStagedDocumentation();
+        const name_token = try self.consumeRequiredToken(.Identifier, "protocol name");
+
+        _ = try self.consumeRequiredToken(.LeftCurlyBrace, "");
+        const current_scope = self.scopeDelimiterContext();
+
+        var funcs = StackFallbackArray(ast.Func, 40).init(self.transient_allocator);
+        var annotations = StackFallbackArray(ast.AnnotationNode, 16).init(self.transient_allocator);
+
+        while (true) {
+            const token = try self.peekNextOrError();
+            switch (token.kind) {
+                .Semicolon, .Comma => self.consume(),
+                .Hash, .PrivateHash, .ExtraHash, .ExtraMode, .PrivateMode, .PrivateExtraMode => {
+                    if (self.parseAnnotation(false, null)) |v| {
+                        try annotations.append(v.data);
+                        if (v.needs_recovery) {
+                            break;
+                        }
+                    } else |err| if (try self.recoverExitsScope(err, recovery_points, current_scope)) {
+                        break;
+                    }
+                },
+                .Documentation => try self.stageDocumentationGroup(),
+                .Identifier => if (self.parseFunc()) |v| {
+                    try funcs.append(v.data);
+                    if (v.needs_recovery) {
+                        break;
+                    }
+                } else |err| if (try self.recoverExitsScope(err, &.{.Semicolon}, current_scope)) {
+                    break;
+                },
+                .RightCurlyBrace => {
+                    self.consume();
+                    self.popScopeDelimiter(.CurlyBrace);
+                    break;
+                },
+                else => {
+                    self.addError(PragmaError.unexpectedToken(&token));
+                    if (try self.skipTokensUntilScope(InterfaceBodyRecoveryPoints, current_scope)) {
+                        break;
+                    }
+                },
+            }
+        }
+
+        try self.protocols.append(self.allocator, ast.Protocol{
+            .name = ast.Identifier{
+                .value = try self.copyString(name_token.literal),
+                .range = name_token.range,
+            },
+            .funcs = try funcs.toOwnedSlice(self.allocator),
+            .documentation = doc,
+            .annotations = try annotations.toOwnedSlice(self.allocator),
+            .range = ast.Range{
+                .start = name_token.range.start,
+                .end = self.currentRangeAssumeSafe().end,
+            },
+        });
+    }
+
+    inline fn buildFunc(
+        self: *Context,
+        name_token: tokenizer.Token,
+        annotations: ast.AnnotationGroup,
+        input: ?ast.FuncArg,
+        output: ?ast.FuncArg,
+        doc: ?ast.Documentation,
+        tag: ?u16,
+    ) Allocator.Error!ast.Func {
+        return ast.Func{
+            .name = ast.Identifier{
+                .value = try self.copyString(name_token.literal),
+                .range = name_token.range,
+            },
+            .annotations = annotations,
+            .input = input,
+            .output = output,
+            .documentation = doc,
+            .tag = tag,
+            .range = .{
+                .start = name_token.range.start,
+                .end = self.currentRangeAssumeSafe().end,
+            },
+        };
+    }
+
+    fn parseFunc(self: *Context) Error!ParseResult(ast.Func) {
+        const doc = try self.consumeStagedDocumentation();
+        const name_token = try self.consumeRequiredToken(.Identifier, "func name");
+        _ = try self.consumeRequiredToken(.LeftParan, "(");
+        var input: ?ast.FuncArg = null;
+        var output: ?ast.FuncArg = null;
+        const current_scope = self.scopeDelimiterContext();
+
+        // Input
+        if (!self.consumeOptionalExitScopeTokenBool(.RightParan)) {
+            input = try self.parseFuncArg();
+            _ = try self.consumeRequiredToken(.RightParan, ")");
+        }
+
+        // Output
+        if (self.consumeOptionalTokenBool(.Return)) {
+            if (try self.consumeOptionalEnterScopeTokenBool(.LeftParan)) {
+                if (self.nextTokenIs(.Identifier)) {
+                    output = try self.parseFuncArg();
+                }
+                _ = try self.consumeRequiredToken(.RightParan, ")");
+            } else {
+                output = try self.parseFuncArg();
+            }
+        }
+
+        // Optional Tag
+        var tag: ?u16 = null;
+        if (self.consumeOptionalTokenBool(.Equal)) {
+            const tagToken = try self.consumeRequiredToken(.Integer, "func tag");
+            if (std.math.cast(u16, tagToken.kind.Integer)) |tagValue| {
+                if (tagValue == 0) {
+                    self.addError(PragmaError.funcTagNumericalError(&tagToken));
+                }
+                tag = tagValue;
+            } else self.addError(PragmaError.funcTagNumericalError(&tagToken));
+        }
+
+        return if (self.parseItemAnnotations(.Semicolon)) |v| .init(
+            try self.buildFunc(name_token, v.data, input, output, doc, tag),
+            v.needs_recovery,
+        ) else |err| .init(
+            try self.buildFunc(name_token, .empty, input, output, doc, tag),
+            try self.recoverExitsScope(err, InterfaceBodyRecoveryPoints, current_scope),
+        );
+    }
+
+    fn parseFuncArg(self: *Context) Error!ast.FuncArg {
+        const streaming = self.consumeOptionalTokenBool(.Stream);
+        const name = try self.parseKeyPath();
+        return ast.FuncArg{
+            .name = name,
+            .streaming = streaming,
+        };
+    }
 
     inline fn processGroupNew(
         self: *Context,

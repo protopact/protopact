@@ -249,7 +249,7 @@ pub const Func = struct {
     input: ?FuncArg,
     output: ?FuncArg,
     tag: ?u16,
-    annotations: []const AnnotationNode,
+    annotations: AnnotationGroup,
     /// range is the boundary of the statement in the source code.
     range: Range,
     /// captured documentation for the func.

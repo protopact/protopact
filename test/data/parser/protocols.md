@@ -1,23 +1,20 @@
-# empty interface
+# empty protocol
 
-```pactum
-interface UserService {
+```pragma
+protocol UserService {
 }
 ```
 
 ```yaml
-options:
-interfaces:
+protocols:
   - name: "UserService"
-    range: "1:11[10-25]"
-    options:
-    funcs:
+    range: "1:10-2:2[9-24]"
 ```
 
-# interface with functions and no param
+# protocol with functions and no param
 
-```pactum
-interface UserService {
+```pragma
+protocol UserService {
 	p#openapi.tags = ["tag one" "tag two"]
 
 	FuncWithoutParamWithSemicolon();
@@ -28,64 +25,46 @@ interface UserService {
 ```
 
 ```yaml
-options:
-interfaces:
+protocols:
   - name: "UserService"
-    range: "1:11[10-249]"
-    options:
-      - raw: false
-        private: true
-        range: "2:4[27-63]"
-        selector:
+    range: "1:10-8:2[9-248]"
+    annotations:
+      - private: true
+        range: "2:4-40[26-62]"
+        key_path:
           content: "openapi.tags"
-          range: "2:4[27-39]"
+          range: "2:4-16[26-38]"
         value:
-          range: "2:19[42-63]"
+          range: "2:19-40[41-62]"
           data:
-            - range: "2:20[43-52]"
+            - range: "2:20-29[42-51]"
               data: "tag one"
-            - range: "2:30[53-62]"
+            - range: "2:30-39[52-61]"
               data: "tag two"
     funcs:
       - name: "FuncWithoutParamWithSemicolon"
-        range: "4:2[66-97]"
-        tag: null
-        input: null
-        output: null
-        options:
+        range: "4:2-33[65-96]"
       - name: "FuncWithoutParamWithOptionsSemicolon"
-        range: "5:2[100-155]"
-        tag: null
-        input: null
-        output: null
-        options:
-          - raw: false
-            private: true
-            range: "5:43[141-155]"
-            selector:
+        range: "5:2-57[99-154]"
+        annotations:
+          - private: true
+            range: "5:43-57[140-154]"
+            key_path:
               content: "api.deprecated"
-              range: "5:43[141-155]"
+              range: "5:43-57[140-154]"
             value:
-              range: "5:43[141-155]"
+              range: "5:43-57[140-154]"
               data: true
       - name: "FuncWithoutParamWithOptionsBlock"
-        range: "6:2[158-195]"
-        tag: null
-        input: null
-        output: null
-        options:
+        range: "6:2-39[157-194]"
       - name: "FuncWithoutParamWithOptionsBlockAndSemicolon"
-        range: "7:2[197-246]"
-        tag: null
-        input: null
-        output: null
-        options:
+        range: "7:2-51[196-245]"
 ```
 
-# interface with args and tags
+# protocol with args and tags
 
-```pactum
-interface UserService {
+```pragma
+protocol UserService {
 	FuncWithInput(some_pact.Input) = 1;
 	FuncWithStreamingInputEmptyOutput(stream some_pact.Input) -> () = 2 p#api.deprecated;
 	FuncWithOutputArgs(stream some_pact.Input) -> some_pact.Output = 3 {};
@@ -94,67 +73,59 @@ interface UserService {
 ```
 
 ```yaml
-options:
-interfaces:
+protocols:
   - name: "UserService"
-    range: "1:11[10-302]"
-    options:
+    range: "1:10-6:2[9-301]"
     funcs:
       - name: "FuncWithInput"
-        range: "2:2[25-59]"
+        range: "2:2-36[24-58]"
         tag: 1
         input:
           name:
             content: "some_pact.Input"
-            range: "2:16[39-54]"
+            range: "2:16-31[38-53]"
           streaming: false
-        output: null
-        options:
       - name: "FuncWithStreamingInputEmptyOutput"
-        range: "3:2[62-146]"
+        range: "3:2-86[61-145]"
         tag: 2
         input:
           name:
             content: "some_pact.Input"
-            range: "3:43[103-118]"
+            range: "3:43-58[102-117]"
           streaming: true
-        output: null
-        options:
-          - raw: false
-            private: true
-            range: "3:72[132-146]"
-            selector:
+        annotations:
+          - private: true
+            range: "3:72-86[131-145]"
+            key_path:
               content: "api.deprecated"
-              range: "3:72[132-146]"
+              range: "3:72-86[131-145]"
             value:
-              range: "3:72[132-146]"
+              range: "3:72-86[131-145]"
               data: true
       - name: "FuncWithOutputArgs"
-        range: "4:2[149-218]"
+        range: "4:2-71[148-217]"
         tag: 3
         input:
           name:
             content: "some_pact.Input"
-            range: "4:28[175-190]"
+            range: "4:28-43[174-189]"
           streaming: true
         output:
           name:
             content: "some_pact.Output"
-            range: "4:48[195-211]"
+            range: "4:48-64[194-210]"
           streaming: false
-        options:
       - name: "FuncWithStreamingArgs"
-        range: "5:2[221-300]"
+        range: "5:2-81[220-299]"
         tag: 4
         input:
           name:
             content: "some_pact.Input"
-            range: "5:31[250-265]"
+            range: "5:31-46[249-264]"
           streaming: true
         output:
           name:
             content: "some_pact.Output"
-            range: "5:58[277-293]"
+            range: "5:58-74[276-292]"
           streaming: true
-        options:
 ```
