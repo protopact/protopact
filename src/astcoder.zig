@@ -546,17 +546,19 @@ const Context = struct {
             try self.writeValue("{s}", .{LiteralNone});
         }
 
-        try self.writeKey("nullable");
-        try self.writeValue("{any}", .{field.nullable});
+        if (!self.opts.exclude_zero_values or field.nullable) {
+            try self.writeKey("nullable");
+            try self.writeValue("{any}", .{field.nullable});
+        }
 
         if (field.oneof_group_index) |index| {
             try self.writeKey("oneof_group_index");
             try self.writeValue("{d}", .{index});
         }
 
-        if (field.annotations.len > 0 or !self.opts.exclude_zero_values) {
+        if (field.annotations.values.len > 0 or !self.opts.exclude_zero_values) {
             try self.writeKey("annotations");
-            try self.writeAnnotations(field.annotations, false);
+            try self.writeAnnotationGroup(&field.annotations);
         }
     }
 
@@ -578,50 +580,50 @@ const Context = struct {
         }
     }
 
-    fn writeStruct(self: *Context, struct_info: ast.Struct) !void {
+    fn writeStruct(self: *Context, info: ast.Struct) !void {
         try self.startObject();
         defer self.endObject();
 
         try self.writeKey("name");
-        try self.writeQuotedValue("{s}", .{struct_info.name.value});
+        try self.writeQuotedValue("{s}", .{info.name.value});
 
-        try self.writeDocumentation(struct_info.documentation);
+        if (self.opts.include_documentation and (!self.opts.exclude_zero_values or info.documentation != null)) {
+            try self.writeDocumentation(info.documentation);
+        }
 
         if (self.opts.include_range) {
             try self.writeKey("range");
-            try self.writeRange(struct_info.range);
+            try self.writeRange(info.range);
         }
 
-        if (struct_info.embedded_structs.len > 0 or !self.opts.exclude_zero_values) {
-            try self.writeKey("embedded_messages");
-            try self.startArray();
-            defer self.endArray();
-
-            for (struct_info.embedded_structs) |embedded_struct| {
-                try self.writeKeyPath(embedded_struct);
-            }
-        }
-
-        if (struct_info.annotations.len > 0 or !self.opts.exclude_zero_values) {
+        if (info.annotations.len > 0 or !self.opts.exclude_zero_values) {
             try self.writeKey("annotations");
-            try self.writeAnnotations(struct_info.annotations, false);
+            try self.writeAnnotations(info.annotations, false);
         }
 
-        if (struct_info.oneof_groups.len > 0 or !self.opts.exclude_zero_values) {
+        if (info.oneof_groups.len > 0 or !self.opts.exclude_zero_values) {
             try self.writeKey("oneof_groups");
             try self.startArray();
             defer self.endArray();
-            for (struct_info.oneof_groups) |oneof| {
+            for (info.oneof_groups) |oneof| {
                 try self.writeOneOf(oneof);
             }
         }
 
-        if (struct_info.fields.len > 0 or !self.opts.exclude_zero_values) {
-            try self.writeKey("fields");
+        if (info.members.len > 0 or !self.opts.exclude_zero_values) {
+            try self.writeKey("members");
             try self.startArray();
             defer self.endArray();
-            for (struct_info.fields) |field| {
-                try self.writeField(field);
+            for (info.members) |member| {
+                switch (member) {
+                    .field => |field| try self.writeField(field),
+                    .embed => |embed| {
+                        try self.startObject();
+                        defer self.endObject();
+                        try self.writeKey("embed");
+                        try self.writeKeyPath(embed);
+                    },
+                }
             }
         }
     }

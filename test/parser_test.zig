@@ -215,17 +215,18 @@ test "enums" {
     });
 }
 
-// test "messages" {
-//     try runTests("./data/parser/messages.md", .{
-//         .marshaler = astcoder.YamlMarshaller{
-//             .includeOptionAssignments = true,
-//             .includeMessages = true,
-//             .includeRange = true,
-//             .includeDocumentation = true,
-//         },
-//         .writeDocumentOnError = true,
-//     });
-// }
+test "structs" {
+    try runTests("./data/parser/structs.md", .{
+        .coder_options = astcoder.Options{
+            .include_annotations = true,
+            .include_structs = true,
+            .include_range = true,
+            .include_documentation = true,
+            .exclude_zero_values = true,
+        },
+        .write_document_on_error = true,
+    });
+}
 
 // test "option definitions" {
 //     try runTests("./data/parser/option_definitions.md", .{

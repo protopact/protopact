@@ -159,8 +159,8 @@ pub const Field = struct {
     tag: ?u16,
     /// whether or not field can be null.
     nullable: bool,
-    /// options assigned to the field.
-    annotations: []const AnnotationNode,
+    /// annotations assigned to the field.
+    annotations: AnnotationGroup,
     /// range is the boundary of the statement in the source code.
     range: Range,
     /// captured documentation for the field.
@@ -200,14 +200,18 @@ pub const OneOf = struct {
 
 /// Struct describes a data model.
 pub const Struct = struct {
+    /// Describes either a field or an embed declaration.
+    pub const Member = union(enum) {
+        embed: KeyPath,
+        field: Field,
+    };
+
     /// name of the constant.
     name: Identifier,
-    /// structs that are directly embedded into the struct.
-    embedded_structs: []const KeyPath,
+    /// members of the struct which can be either fields or embedded structs.
+    members: []const Member,
     /// annotations assigned to the struct.
     annotations: []const AnnotationNode,
-    /// all of the model fields.
-    fields: []const Field,
     /// range is the boundary of the statement in the source code.
     range: Range,
     oneof_groups: []const OneOf,
