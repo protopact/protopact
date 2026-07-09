@@ -468,3 +468,56 @@ annotations:
           range: "4:7-9[42-44]"
           data: 12
 ```
+
+# bare annotations
+
+```pragma
+import # "std"
+
+p# {
+    .required,
+    .json.name = "something"
+}
+
+struct A {
+    field: u32 #.required #.json.name = "$Field"
+}
+```
+
+```yaml
+annotations:
+  - private: true
+    range: "3:1-6:2[16-66]"
+    key_path:
+      content: ""
+      range: "1:1-1[0-0]"
+    block:
+      - bare: true
+        range: "4:6-14[26-34]"
+        key_path:
+          content: "required"
+          range: "4:6-14[26-34]"
+        value:
+          range: "4:6-14[26-34]"
+          data: true
+      - bare: true
+        range: "5:6-29[41-64]"
+        key_path:
+          content: "json.name"
+          range: "5:6-15[41-50]"
+        value:
+          range: "5:18-29[53-64]"
+          data: "something"
+```
+
+# root annotation does not support bare
+
+```pragma
+p#. {
+    required
+}
+```
+
+```yaml
+1:5-6[4-5] expected annotation key path or string @literal={
+```

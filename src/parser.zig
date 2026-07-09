@@ -1213,6 +1213,7 @@ const Context = struct {
     ) Error!ParseResult(ast.AnnotationNode) {
         const modifiers = captured_modifiers orelse try self.parseAnnotationModifiers(!inside_block);
         const start = self.currentRangeAssumeSafe().start;
+        const bare = self.consumeOptionalTokenBool(.Dot);
 
         // Parse the key.
         const key_token = try self.peekNextOrError();
@@ -1240,7 +1241,7 @@ const Context = struct {
                 const current_scope = self.scopeDelimiterContext();
                 return if (self.parseAnnotationBlock()) |v| .init(
                     ast.AnnotationNode{
-                        .flags = .{ .private = modifiers.private, .extra = modifiers.extra },
+                        .flags = .{ .private = modifiers.private, .extra = modifiers.extra, .bare = bare },
                         .key_path = key_path,
                         .value = .{ .group = v.data },
                         .range = .{
@@ -1257,7 +1258,7 @@ const Context = struct {
                 const current_scope = self.scopeDelimiterContext();
                 return if (self.parseValue()) |v| .init(
                     ast.AnnotationNode{
-                        .flags = .{ .extra = modifiers.extra, .private = modifiers.private },
+                        .flags = .{ .extra = modifiers.extra, .private = modifiers.private, .bare = bare },
                         .key_path = key_path,
                         .value = .{ .leaf = v.data },
                         .range = .{
@@ -1273,7 +1274,7 @@ const Context = struct {
         };
 
         return .initOk(ast.AnnotationNode{
-            .flags = .{ .extra = modifiers.extra, .private = modifiers.private },
+            .flags = .{ .extra = modifiers.extra, .private = modifiers.private, .bare = bare },
             .key_path = key_path,
             .value = .{
                 .leaf = .{
