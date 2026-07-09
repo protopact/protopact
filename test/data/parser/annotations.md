@@ -521,3 +521,44 @@ p#. {
 ```yaml
 1:5-6[4-5] expected annotation key path or string @literal={
 ```
+
+# profiles
+
+```pragma
+p[internal]# {
+    go.mod = "pragmaonce.dev"
+    
+    px[vip, tier2]#openapi.doc = "https://pragmaonce.dev"
+}
+```
+
+```yaml
+annotations:
+  - private: true
+    profiles:
+      - "internal"
+    range: "1:12-5:2[11-109]"
+    key_path:
+      content: ""
+      range: "1:1-1[0-0]"
+    block:
+      - range: "2:5-30[19-44]"
+        key_path:
+          content: "go.mod"
+          range: "2:5-11[19-25]"
+        value:
+          range: "2:14-30[28-44]"
+          data: "pragmaonce.dev"
+      - extra: true
+        private: true
+        profiles:
+          - "vip"
+          - "tier2"
+        range: "4:20-58[69-107]"
+        key_path:
+          content: "openapi.doc"
+          range: "4:20-31[69-80]"
+        value:
+          range: "4:34-58[83-107]"
+          data: "https://pragmaonce.dev"
+```

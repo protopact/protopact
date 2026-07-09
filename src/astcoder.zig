@@ -245,6 +245,18 @@ const Context = struct {
                 try self.writeValue("{any}", .{annotation.flags.bare});
             }
 
+            if (!self.opts.exclude_zero_values or annotation.profiles.len > 0) {
+                try self.writeKey("profiles");
+                if (annotation.profiles.len > 0) {
+                    try self.startArray();
+                    defer self.endArray();
+
+                    for (annotation.profiles) |profile| {
+                        try self.writeQuotedValue("{s}", .{ profile.value });
+                    }
+                } else try self.writeValue("[]", .{});
+            }
+
             if (self.opts.include_range) {
                 try self.writeKey("range");
                 try self.writeRange(annotation.range);

@@ -1,5 +1,5 @@
-// TODO: * Support profiles
-//       * Use group ID to learn if a decl is inside a paran group.
+// TODO: * Use group ID to learn if a decl is inside a paran group.
+//       * Avoid infinite loop while recovery, you can store the position or range of the last recovered token.
 
 const std = @import("std");
 const tokenizer = @import("tokenizer.zig");
@@ -270,10 +270,10 @@ const Context = struct {
         while (self.it.next()) |token| {
             (switch (token.kind) {
                 .Import => self.processImport(),
-                .ExtraHash, .Hash, .PrivateHash => option: {
+                .ExtraHash, .Hash, .PrivateHash, .ExtraMode, .PrivateExtraMode, .PrivateMode => annotation: {
                     // NB: Special case where we need to consume the first token itself.
                     self.it.goBack();
-                    break :option self.processAnnotation();
+                    break :annotation self.processAnnotation();
                 },
                 .Const => self.processConst(),
                 .Enum => self.processEnum(),
@@ -1177,6 +1177,33 @@ const Context = struct {
         }
     }
 
+    fn parseProfiles(self: *Context) Error![]const ast.Identifier {
+        try self.pushScopeDelimiter(.Bracket);
+        var profiles: StackFallbackArray(ast.Identifier, 16) = .init(self.transient_allocator);
+        while (true) {
+            const token = self.it.next() orelse return error.UnexpectedEOF;
+            switch (token.kind) {
+                .Identifier => {
+                    try profiles.append(ast.Identifier{
+                        .value = try self.copyString(token.literal),
+                        .range = token.range,
+                    });
+                },
+                .Comma => {},
+                .RightBracket => {
+                    self.popScopeDelimiter(.Bracket);
+                    _ = try self.consumeRequiredToken(.Hash, "#");
+                    break;
+                },
+                else => {
+                    self.addError(.expectToken(&token, "], comma or profile name"));
+                    return error.UnexpectedToken;
+                },
+            }
+        }
+        return try profiles.toOwnedSlice(self.allocator);
+    }
+
     fn parseAnnotationModifiers(self: *Context, comptime needs_hash_prefix: bool) Error!AnnotationModifiers {
         const token = self.it.peek(1) orelse {
             if (needs_hash_prefix) {
@@ -1195,13 +1222,28 @@ const Context = struct {
                 }
                 return .default;
             },
+            .PrivateMode => {
+                self.consume();
+                const profiles = try self.parseProfiles();
+                return .{ .private = true, .profiles = profiles };
+            },
             .ExtraHash => {
                 self.consume();
                 return .{ .extra = true };
             },
+            .ExtraMode => {
+                self.consume();
+                const profiles = try self.parseProfiles();
+                return .{ .extra = true, .profiles = profiles };
+            },
             .PrivateHash => {
                 self.consume();
                 return .{ .private = true };
+            },
+            .PrivateExtraMode => {
+                self.consume();
+                const profiles = try self.parseProfiles();
+                return .{ .extra = true, .private = true, .profiles = profiles };
             },
             else => if (needs_hash_prefix) {
                 self.addError(PragmaError.expectToken(&token, "annotation modifier or end of statement"));
@@ -1300,6 +1342,9 @@ const Context = struct {
             .Hash,
             .ExtraHash,
             .PrivateHash,
+            .ExtraMode,
+            .PrivateMode,
+            .PrivateExtraMode,
         };
         var values = StackFallbackArray(ast.AnnotationNode, 16).init(self.transient_allocator);
         _ = try self.consumeRequiredToken(.LeftCurlyBrace, "{");
