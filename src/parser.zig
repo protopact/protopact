@@ -1,7 +1,7 @@
-// TODO: * Use group ID to learn if a decl is inside a paran group.
-//       * Support bare annotations
+// TODO: * Support bare annotations
 //       * Support @ref
 //       * Support profiles
+//       * Use group ID to learn if a decl is inside a paran group.
 
 const std = @import("std");
 const tokenizer = @import("tokenizer.zig");
@@ -351,23 +351,6 @@ const Context = struct {
             .annotations = annotations,
             .range = .{ .start = start, .end = self.currentRangeAssumeSafe().end },
         });
-    }
-
-    fn createAnnotationRoot(
-        self: *Context,
-        start: usize,
-        annotations: []const ast.AnnotationNode
-    ) error{OutOfMemory}![]const ast.AnnotationNode {
-        const block = try self.allocator.create(ast.AnnotationNode);
-        block.flags = .{ .private = false, .extra = false, .bare = false, .headless = true };
-        block.range = .{ .start = start, .end = self.currentRangeAssumeSafe().end };
-        block.value = .{ .group = annotations };
-        block.profiles = &.{};
-        block.key_path = .init("", .zero);
-        var slice: []const ast.AnnotationNode = undefined;
-        slice.ptr = @ptrCast(block);
-        slice.len = 1;
-        return slice;
     }
 
     fn processConstBody(self: *Context) Error!void {

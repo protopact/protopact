@@ -245,19 +245,14 @@ const Context = struct {
                 try self.writeValue("{any}", .{annotation.flags.bare});
             }
 
-            if (!self.opts.exclude_zero_values or annotation.flags.headless) {
-                try self.writeKey("headless");
-                try self.writeValue("{any}", .{annotation.flags.headless});
-            }
-
             if (self.opts.include_range) {
                 try self.writeKey("range");
                 try self.writeRange(annotation.range);
             }
-            if (!annotation.flags.headless) {
-                try self.writeKey("key_path");
-                try self.writeKeyPath(annotation.key_path);
-            }
+
+            try self.writeKey("key_path");
+            try self.writeKeyPath(annotation.key_path);
+
             try self.writeAnnotationValue(&annotation.value);
         }
     }
