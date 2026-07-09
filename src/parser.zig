@@ -1,6 +1,4 @@
-// TODO: * Support bare annotations
-//       * Support @ref
-//       * Support profiles
+// TODO: * Support profiles
 //       * Use group ID to learn if a decl is inside a paran group.
 
 const std = @import("std");
@@ -129,6 +127,13 @@ pub const PragmaError = struct {
     fn funcTagNumericalError(token: *const tokenizer.Token) PragmaError {
         return .{
             .message = "func tag value must be a positive integer from 1 to 2^32-1",
+            .location = Location{ .range = token.range },
+        };
+    }
+
+    fn unsupportedPragmaKeyword(token: *const tokenizer.Token) PragmaError {
+        return .{
+            .message = "Unexpected pragma function, did you mean to use @ref()?",
             .location = Location{ .range = token.range },
         };
     }
@@ -1392,6 +1397,24 @@ const Context = struct {
                         break :blk false;
                     },
                     .Comma => {},
+                    .At => {
+                        const key = try self.parseRef();
+                        _ = self.consumeRequiredToken(.Colon, ":") catch |err| {
+                            if (try self.recoverExitsScope(err, ObjectRecoveryPoints, current_scope))
+                                break :blk true;
+                        };
+                        if (self.parseValue()) |v| {
+                            try values.append(ast.Pair{
+                                .key = .{ .ref = key },
+                                .value = v.data,
+                            });
+                            if (v.needs_recovery) {
+                                break :blk true;
+                            }
+                        } else |err| if (try self.recoverExitsScope(err, ObjectRecoveryPoints, current_scope)) {
+                            break :blk true;
+                        }
+                    },
                     .String => {
                         _ = self.consumeRequiredToken(.Colon, ":") catch |err| {
                             if (try self.recoverExitsScope(err, ObjectRecoveryPoints, current_scope))
@@ -1448,11 +1471,31 @@ const Context = struct {
             }),
             .LeftBracket => self.parseValueArray(),
             .LeftCurlyBrace => self.parseValueObject(),
+            .At => {
+                const start = self.currentRangeAssumeSafe().start;
+                const key_path = try self.parseRef();
+                return .initOk(.{
+                    .literal = .{ .ref = key_path },
+                    .range = .{ .start = start, .end = self.currentRangeAssumeSafe().end },
+                });
+            },
             else => {
                 self.addError(PragmaError.expectToken(&token, "value"));
                 return Error.UnexpectedToken;
             },
         };
+    }
+
+    fn parseRef(self: *Context) Error!ast.KeyPath {
+        const ref_token = try self.consumeRequiredToken(.Identifier, "pragma function name");
+        if (!std.mem.eql(u8, ref_token.literal, "ref")) {
+            self.addError(PragmaError.unsupportedPragmaKeyword(&ref_token));
+            return Error.UnexpectedToken;
+        }
+        _ = try self.consumeRequiredToken(.LeftParan, "(");
+        const key_path = try self.parseKeyPath();
+        _ = try self.consumeRequiredToken(.RightParan, ")");
+        return key_path;
     }
 
     fn parseKeyPath(self: *Context) Error!ast.KeyPath {

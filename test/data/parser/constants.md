@@ -95,3 +95,80 @@ constants:
       range: "6:7-11[111-115]"
       data: 3.14
 ```
+
+# ref simple
+
+```pragma
+const ColorType = @ref(Color)
+const B = {
+    "name": @ref(User)
+}
+```
+
+```yaml
+constants:
+  - name: "ColorType"
+    range: "1:7-30[6-29]"
+    value:
+      range: "1:19-30[18-29]"
+      data:
+        ref:
+          content: "Color"
+          range: "1:24-29[23-28]"
+  - name: "B"
+    range: "2:7-4:2[36-66]"
+    value:
+      range: "2:11-4:2[40-66]"
+      data:
+        - key: "name"
+          value:
+            range: "3:13-23[54-64]"
+            data:
+              ref:
+                content: "User"
+                range: "3:18-22[59-63]"
+```
+
+# ref as object keys
+
+```pragma
+const ColorType = @ref(Color)
+const B = {
+    "name": @ref(User),
+    @ref(A): @ref(B),
+}
+```
+
+```yaml
+constants:
+  - name: "ColorType"
+    range: "1:7-30[6-29]"
+    value:
+      range: "1:19-30[18-29]"
+      data:
+        ref:
+          content: "Color"
+          range: "1:24-29[23-28]"
+  - name: "B"
+    range: "2:7-5:2[36-89]"
+    value:
+      range: "2:11-5:2[40-89]"
+      data:
+        - key: "name"
+          value:
+            range: "3:13-23[54-64]"
+            data:
+              ref:
+                content: "User"
+                range: "3:18-22[59-63]"
+        - key:
+            ref:
+              content: "A"
+              range: "4:10-11[75-76]"
+          value:
+            range: "4:14-21[79-86]"
+            data:
+              ref:
+                content: "B"
+                range: "4:19-20[84-85]"
+```

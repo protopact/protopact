@@ -54,8 +54,6 @@ pub const AnnotationNode = struct {
         extra: bool = false,
         /// private means the annotation is marked as private.
         private: bool = false,
-        // headless indicates the node is a root and does not have a prefix key_path.
-        headless: bool = false,
         // bare means the import uses the bare import syntax.
         bare: bool = false,
     };

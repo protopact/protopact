@@ -289,12 +289,27 @@ const Context = struct {
                     defer self.endObject();
 
                     try self.writeKey("key");
-                    try self.writeQuotedValue("{s}", .{item.key.string});
+                    switch (item.key) {
+                        .string => |str| try self.writeQuotedValue("{s}", .{str}),
+                        .ref => |ref| {
+                            try self.startObject();
+                            defer self.endObject();
+
+                            try self.writeKey("ref");
+                            try self.writeKeyPath(ref);
+                        },
+                    }
                     try self.writeKey("value");
                     try self.writeRangedLiteral(&item.value);
                 }
             },
-            .ref => {},
+            .ref => |ref| {
+                try self.startObject();
+                defer self.endObject();
+
+                try self.writeKey("ref");
+                try self.writeKeyPath(ref);
+            },
         }
     }
 
