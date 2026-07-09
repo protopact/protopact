@@ -273,7 +273,7 @@ const Context = struct {
                 .Const => self.processConst(),
                 .Enum => self.processEnum(),
                 .Struct => self.processStruct(),
-                // .Annotation => self.processOptionDefinition(),
+                .Annotation => self.processAnnotationDefinition(),
                 .Protocol => self.processProtocol(),
                 .Documentation => documentation: {
                     // NB: Special case where we need to consume the first token itself.
@@ -413,15 +413,17 @@ const Context = struct {
         var variants = StackFallbackArray(ast.EnumVariant, 32).init(self.transient_allocator);
 
         while (true) {
-            const token = try self.peekNextOrError();
+            const token = self.peekNextOrError() catch break;
             switch (token.kind) {
-                .Hash, .ExtraHash, .PrivateHash, .ExtraMode, .PrivateMode, .PrivateExtraMode => if (self.parseAnnotation(false, null)) |v| {
-                    try annotations.append(v.data);
-                    if (v.needs_recovery and try self.skipTokensUntilScope(recovery_points, current_scope)) {
+                .Hash, .ExtraHash, .PrivateHash, .ExtraMode, .PrivateMode, .PrivateExtraMode => {
+                    if (self.parseAnnotation(false, null)) |v| {
+                        try annotations.append(v.data);
+                        if (v.needs_recovery and try self.skipTokensUntilScope(recovery_points, current_scope)) {
+                            break;
+                        }
+                    } else |err| if (try self.recoverExitsScope(err, recovery_points, current_scope)) {
                         break;
                     }
-                } else |err| if (try self.recoverExitsScope(err, recovery_points, current_scope)) {
-                    break;
                 },
                 .Identifier => if (self.parseEnumVariant()) |v| {
                     try variants.append(v.data);
@@ -528,7 +530,7 @@ const Context = struct {
         var oneof_groups = StackFallbackArray(ast.OneOf, 8).init(self.transient_allocator);
 
         while (true) {
-            const token = try self.peekNextOrError();
+            const token = self.peekNextOrError() catch break;
             switch (token.kind) {
                 .Comma => self.consume(),
                 .Documentation => try self.stageDocumentationGroup(),
@@ -849,71 +851,76 @@ const Context = struct {
         }, parent_might_need_recovery and (self.scopeDelimiterContext() != current_scope));
     }
 
-    // fn processOptionDefinition(self: *Context) Error!void {
-    //     const start = self.it.currentAssumeSafe().position;
-    //     _ = try self.consumeRequiredToken(.For, "for");
-    //
-    //     var targetSet = ast.AnnotationTargetSet.init(.{});
-    //     targetSet.insert(try self.parseOptionTarget());
-    //     while (true) {
-    //         const nextToken = try self.peekNextOrError();
-    //         if (nextToken.kind == .LeftCurlyBrace) {
-    //             self.consume();
-    //             break;
-    //         }
-    //         _ = try self.consumeRequiredToken(.Comma, ",");
-    //         targetSet.insert(try self.parseOptionTarget());
-    //     }
-    //
-    //     var fields = StackFallbackArray(ast.Field, 40).init(self.transient_allocator);
-    //
-    //     while (true) {
-    //         const nextToken = try self.peekNextOrError();
-    //         switch (nextToken.kind) {
-    //             .Comment, .Comma => self.consume(),
-    //             .RightCurlyBrace => {
-    //                 self.consume();
-    //                 break;
-    //             },
-    //             else => if (self.parseField(null)) |v| {
-    //                 try fields.append(v.data);
-    //                 if (v.scope_exited) break;
-    //             } else |err| if (try self.recoverExitsScope(err, &.{.Comma}))
-    //                 break,
-    //         }
-    //     }
-    //
-    //     try self.annotation_definitions.append(self.allocator, ast.AnnotationDefinition{
-    //         .targets = targetSet,
-    //         .fields = try fields.toOwnedSlice(self.allocator),
-    //         .range = .{
-    //             .start = start,
-    //             .endOffset = self.it.currentAssumeSafe().endOffset(),
-    //         },
-    //     });
-    // }
-    //
-    // inline fn parseOptionTarget(self: *Context) Error!ast.AnnotationTarget {
-    //     const targetToken = self.it.next() orelse {
-    //         self.addError(PragmaError.unexpectedEOF());
-    //         return Error.UnexpectedEOF;
-    //     };
-    //     switch (targetToken.kind) {
-    //         .TargetPackage => return ast.AnnotationTarget.Package,
-    //         .TargetOneOf => return ast.AnnotationTarget.OneOf,
-    //         .TargetEnum => return ast.AnnotationTarget.Enum,
-    //         .TargetConst => return ast.AnnotationTarget.Constant,
-    //         .TargetEnumVariant => return ast.AnnotationTarget.EnumVariant,
-    //         .TargetStruct => return ast.AnnotationTarget.Struct,
-    //         .TargetField => return ast.AnnotationTarget.Field,
-    //         .TargetProtocol => return ast.AnnotationTarget.Protocol,
-    //         .TargetFunc => return ast.AnnotationTarget.Func,
-    //         else => {
-    //             self.addError(PragmaError.expectToken(&targetToken, "option target"));
-    //             return Error.UnexpectedToken;
-    //         },
-    //     }
-    // }
+    fn processAnnotationDefinition(self: *Context) Error!void {
+        const start = self.currentRangeAssumeSafe().start;
+        _ = try self.consumeRequiredToken(.For, "for");
+
+        var target_set = ast.AnnotationTargetSet.init(.{});
+        target_set.insert(try self.parseAnnotationTarget());
+        while (true) {
+            const next_token = try self.peekNextOrError();
+            if (next_token.kind == .LeftCurlyBrace) {
+                self.consume();
+                break;
+            }
+            _ = try self.consumeRequiredToken(.Comma, ",");
+            target_set.insert(try self.parseAnnotationTarget());
+        }
+
+        const current_scope = self.scopeDelimiterContext();
+
+        var fields = StackFallbackArray(ast.Field, 40).init(self.transient_allocator);
+
+        while (true) {
+            const next_token = self.peekNextOrError() catch break;
+            switch (next_token.kind) {
+                .Comma => self.consume(),
+                .RightCurlyBrace => {
+                    self.consume();
+                    break;
+                },
+                else => if (self.parseField(null)) |v| {
+                    try fields.append(v.data);
+                    if (v.needs_recovery) {
+                        break;
+                    }
+                } else |err| if (try self.recoverExitsScope(err, &.{.Comma}, current_scope)) {
+                    break;
+                }
+            }
+        }
+
+        try self.annotation_definitions.append(self.allocator, ast.AnnotationDefinition{
+            .targets = target_set,
+            .fields = try fields.toOwnedSlice(self.allocator),
+            .range = .{
+                .start = start,
+                .end = self.currentRangeAssumeSafe().end,
+            },
+        });
+    }
+
+    inline fn parseAnnotationTarget(self: *Context) Error!ast.AnnotationTarget {
+        const target_token = self.it.next() orelse {
+            self.addError(PragmaError.unexpectedEOF());
+            return Error.UnexpectedEOF;
+        };
+        switch (target_token.kind) {
+            .TargetPackage => return ast.AnnotationTarget.Package,
+            .TargetOneOf => return ast.AnnotationTarget.OneOf,
+            .TargetEnum => return ast.AnnotationTarget.Enum,
+            .TargetConst => return ast.AnnotationTarget.Constant,
+            .TargetEnumVariant => return ast.AnnotationTarget.EnumVariant,
+            .TargetStruct => return ast.AnnotationTarget.Struct,
+            .TargetField => return ast.AnnotationTarget.Field,
+            .TargetProtocol => return ast.AnnotationTarget.Protocol,
+            .TargetFunc => return ast.AnnotationTarget.Func,
+            else => {
+                self.addError(PragmaError.expectToken(&target_token, "annotation target"));
+                return Error.UnexpectedToken;
+            },
+        }
+    }
 
     fn processProtocol(self: *Context) Error!void {
         const recovery_points: []const TokenKindTag = &.{ .Identifier, .Documentation };
@@ -932,7 +939,7 @@ const Context = struct {
         var annotations = StackFallbackArray(ast.AnnotationNode, 16).init(self.transient_allocator);
 
         while (true) {
-            const token = try self.peekNextOrError();
+            const token = self.peekNextOrError() catch break;
             switch (token.kind) {
                 .Semicolon, .Comma => self.consume(),
                 .Hash, .PrivateHash, .ExtraHash, .ExtraMode, .PrivateMode, .PrivateExtraMode => {
@@ -1798,12 +1805,12 @@ const Context = struct {
         while (true) {
             const token = self.it.peek(1) orelse {
                 self.scope_delimiters.clear();
-                return scope > 0;
+                return true;
             };
             if (token.kind == .EOF) {
                 self.scope_delimiters.clear();
                 self.consume();
-                return scope > 0;
+                return true;
             }
 
             if (try self.handleScopeDelimiterRecovery(token.kind, scope)) {
@@ -1861,6 +1868,9 @@ const Context = struct {
         comptime tokens: []const TokenKindTag,
         scope: usize,
     ) Error!bool {
+        if (err == Error.UnexpectedEOF) {
+            return true;
+        }
         if (err != Error.UnexpectedToken) {
             return err;
         }
@@ -1873,8 +1883,7 @@ const Context = struct {
         } else {
             // If we are already in the root scope, skip until some entry keyword.
             // Unless the starting `scope` is also root, we should consider the scope exited.
-            _ = try self.skipTokensUntil(EntryKeywords);
-            return scope > 0;
+            return try self.skipTokensUntilScope(EntryKeywords, 0);
         }
     }
 

@@ -228,16 +228,17 @@ test "structs" {
     });
 }
 
-// test "option definitions" {
-//     try runTests("./data/parser/option_definitions.md", .{
-//         .marshaler = astcoder.YamlMarshaller{
-//             .includeOptionAssignments = true,
-//             .includeOptionDefinitions = true,
-//             .includeRange = true,
-//         },
-//         .writeDocumentOnError = true,
-//     });
-// }
+test "annotation definitions" {
+    try runTests("./data/parser/annotation_definitions.md", .{
+        .coder_options = astcoder.Options{
+            .include_annotation_definitions = true,
+            .include_annotations = true,
+            .include_range = true,
+            .exclude_zero_values = true,
+        },
+        .write_document_on_error = true,
+    });
+}
 
 test "protocols" {
     try runTests("./data/parser/protocols.md", .{

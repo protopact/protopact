@@ -1,31 +1,27 @@
 # simple definition
 
-```pactum
-option for Pact {
-	export_files: bool
+```pragma
+annotation for Package {
+    export_files: bool
 }
 ```
 
 ```yaml
-options:
-option_definitions:
+annotation_definitions:
   - targets:
-      - Pact
-    range: "1:1[0-39]"
+      - Package
+    range: "1:1-3:2[0-49]"
     fields:
       - name: "export_files"
-        range: "2:2[19-37]"
+        range: "2:5-23[29-47]"
         type: "bool"
-        type_range: "2:16[33-37]"
-        tag: null
-        nullable: false
-        options:
+        type_range: "2:19-23[43-47]"
 ```
 
 # multiple targets
 
-```pactum
-option for Pact, Interface, Func {
+```pragma
+annotation for Package, Protocol, Func {
 	export_files: bool = 1 #optional,
 	either_this_or_that: oneof {
 		this: bool,
@@ -35,110 +31,103 @@ option for Pact, Interface, Func {
 ```
 
 ```yaml
-options:
-option_definitions:
+annotation_definitions:
   - targets:
-      - Pact
-      - Interface
+      - Package
+      - Protocol
       - Func
-    range: "1:1[0-152]"
+    range: "1:1-7:2[0-158]"
     fields:
       - name: "export_files"
-        range: "2:2[36-68]"
+        range: "2:2-34[42-74]"
         type: "bool"
-        type_range: "2:16[50-54]"
+        type_range: "2:16-20[56-60]"
         tag: 1
-        nullable: false
-        options:
-          - raw: false
-            private: false
-            range: "2:26[60-68]"
-            selector:
+        annotations:
+          - range: "2:26-34[66-74]"
+            key_path:
               content: "optional"
-              range: "2:26[60-68]"
+              range: "2:26-34[66-74]"
             value:
-              range: "2:26[60-68]"
+              range: "2:26-34[66-74]"
               data: true
       - name: "either_this_or_that"
-        range: "3:2[71-150]"
-        type: "oneof"
-        oneof_options:
+        range: "3:2-6:3[77-156]"
+        type: oneof
         oneof_fields:
           - name: "this"
-            range: "4:3[102-112]"
+            range: "4:3-13[108-118]"
             type: "bool"
-            type_range: "4:9[108-112]"
-            tag: null
-            nullable: false
-            options:
+            type_range: "4:9-13[114-118]"
           - name: "that"
-            range: "5:3[116-147]"
+            range: "5:3-34[122-153]"
             type: "list[item=wellknown.Timestamp]"
-            type_range: "5:9[122-147]"
-            tag: null
-            nullable: false
-            options:
-        type_range: "3:23[92-150]"
-        tag: null
-        nullable: false
-        options:
+            type_range: "5:9-34[128-153]"
+        type_range: "3:23-6:3[98-156]"
 ```
 
 # no for, no target
 
-```pactum
-option {
+```pragma
+annotation {
 	export_files: bool = 1 #optional,
 }
 ```
 
 ```yaml
-options:
-option_definitions:
-
-1:8[7] expected for @literal={
+1:12-13[11-12] expected for @literal={
 ```
 
 # no target
 
-```pactum
-option for {
+```pragma
+annotation for {
 	export_files: bool = 1 #optional,
 }
 ```
 
 ```yaml
-options:
-option_definitions:
-
-1:12[11] expected option target @literal={
+1:16-17[15-16] expected annotation target @literal={
 ```
 
 # bad comma
 
-```pactum
-option for Enum, {
+```pragma
+annotation for Enum, {
 	export_files: bool = 1 #optional,
 }
 ```
 
 ```yaml
-options:
-option_definitions:
-
-1:18[17] expected option target @literal={
+1:22-23[21-22] expected annotation target @literal={
 ```
 
 # bad comma
 
-```pactum
-option for Enum {
+```pragma
+annotation for Enum {
 	export_files: bool = 1 #optional,
 ```
 
 ```yaml
-options:
-option_definitions:
+annotation_definitions:
+  - targets:
+      - Enum
+    range: "1:1-2:35[0-56]"
+    fields:
+      - name: "export_files"
+        range: "2:2-34[23-55]"
+        type: "bool"
+        type_range: "2:16-20[37-41]"
+        tag: 1
+        annotations:
+          - range: "2:26-34[47-55]"
+            key_path:
+              content: "optional"
+              range: "2:26-34[47-55]"
+            value:
+              range: "2:26-34[47-55]"
+              data: true
 
-0:0[0] unexpected end of file @literal=
+0:0[0] unexpected end of file
 ```
