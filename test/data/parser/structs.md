@@ -217,3 +217,72 @@ structs:
               range: "3:38-49[70-81]"
               data: true
 ```
+
+# struct annotations with profiles
+
+```pragma
+struct (
+    User {
+        px[midlayer]# "org.mycoolorg/ref" = "https://mycoolorg.org/docs/users"
+
+        id: u20 p[internal]#json.name = "$_id",
+        name: string p[internal]#openapi {
+            external_uri = "https://mycoolorg.org/docs/ref=user_name_v1"
+        }
+    }
+)
+```
+
+```yaml
+structs:
+  - name: "User"
+    range: "2:5-9:6[13-279]"
+    annotations:
+      - extra: true
+        private: true
+        profiles:
+          - "midlayer"
+        range: "3:23-79[42-98]"
+        key_path:
+          content: "org.mycoolorg/ref"
+          range: "3:23-42[42-61]"
+        value:
+          range: "3:45-79[64-98]"
+          data: "https://mycoolorg.org/docs/users"
+    members:
+      - name: "id"
+        range: "5:9-47[108-146]"
+        type: "u20"
+        type_range: "5:13-16[112-115]"
+        annotations:
+          - private: true
+            profiles:
+              - "internal"
+            range: "5:29-47[128-146]"
+            key_path:
+              content: "json.name"
+              range: "5:29-38[128-137]"
+            value:
+              range: "5:41-47[140-146]"
+              data: "$_id"
+      - name: "name"
+        range: "6:9-8:10[156-273]"
+        type: "string"
+        type_range: "6:15-21[162-168]"
+        annotations:
+          - private: true
+            profiles:
+              - "internal"
+            range: "6:33-8:10[180-273]"
+            key_path:
+              content: "openapi"
+              range: "6:34-41[181-188]"
+            block:
+              - range: "7:13-73[203-263]"
+                key_path:
+                  content: "external_uri"
+                  range: "7:13-25[203-215]"
+                value:
+                  range: "7:28-73[218-263]"
+                  data: "https://mycoolorg.org/docs/ref=user_name_v1"
+```
