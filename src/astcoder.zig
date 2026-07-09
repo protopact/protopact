@@ -409,7 +409,7 @@ const Context = struct {
             try self.writeKey("value");
             try self.writeRangedLiteral(&constant.value);
 
-            if (constant.annotations.values.len > 0 or !self.opts.exclude_zero_values) {
+            if (self.opts.include_annotations and (constant.annotations.values.len > 0 or !self.opts.exclude_zero_values)) {
                 try self.writeKey("annotations");
                 try self.writeAnnotationGroup(&constant.annotations);
             }
@@ -438,7 +438,7 @@ const Context = struct {
             try self.writeValue(LiteralNone, .{});
         }
 
-        if (variant.annotations.values.len > 0 or !self.opts.exclude_zero_values) {
+        if (self.opts.include_annotations and (variant.annotations.values.len > 0 or !self.opts.exclude_zero_values)) {
             try self.writeKey("annotations");
             try self.writeAnnotationGroup(&variant.annotations);
         }
@@ -467,7 +467,7 @@ const Context = struct {
                 try self.writeRange(enum_type.range);
             }
 
-            if (enum_type.annotations.len > 0 or !self.opts.exclude_zero_values) {
+            if (self.opts.include_annotations and (enum_type.annotations.len > 0 or !self.opts.exclude_zero_values)) {
                 try self.writeKey("annotations");
                 try self.writeAnnotations(enum_type.annotations, false);
             }
@@ -556,7 +556,7 @@ const Context = struct {
             try self.writeValue("{d}", .{index});
         }
 
-        if (field.annotations.values.len > 0 or !self.opts.exclude_zero_values) {
+        if (self.opts.include_annotations and (field.annotations.values.len > 0 or !self.opts.exclude_zero_values)) {
             try self.writeKey("annotations");
             try self.writeAnnotationGroup(&field.annotations);
         }
@@ -574,7 +574,7 @@ const Context = struct {
             try self.writeRange(oneof.range);
         }
 
-        if (oneof.annotations.len > 0 or !self.opts.exclude_zero_values) {
+        if (self.opts.include_annotations and (oneof.annotations.len > 0 or !self.opts.exclude_zero_values)) {
             try self.writeKey("annotations");
             try self.writeAnnotations(oneof.annotations, false);
         }
@@ -596,7 +596,7 @@ const Context = struct {
             try self.writeRange(info.range);
         }
 
-        if (info.annotations.len > 0 or !self.opts.exclude_zero_values) {
+        if (self.opts.include_annotations and (info.annotations.len > 0 or !self.opts.exclude_zero_values)) {
             try self.writeKey("annotations");
             try self.writeAnnotations(info.annotations, false);
         }
@@ -702,7 +702,7 @@ const Context = struct {
             try self.writeValue("{s}", .{LiteralNone});
         }
 
-        if (func.annotations.values.len > 0 or !self.opts.exclude_zero_values) {
+        if (self.opts.include_annotations and (func.annotations.values.len > 0 or !self.opts.exclude_zero_values)) {
             try self.writeKey("annotations");
             try self.writeAnnotationGroup(&func.annotations);
         }
@@ -758,7 +758,7 @@ const Context = struct {
             try self.writeRange(protocol.range);
         }
 
-        if (protocol.annotations.len > 0 or !self.opts.exclude_zero_values) {
+        if (self.opts.include_annotations and (protocol.annotations.len > 0 or !self.opts.exclude_zero_values)) {
             try self.writeKey("annotations");
             try self.writeAnnotations(protocol.annotations, false);
         }
@@ -782,18 +782,16 @@ const Context = struct {
 
         if (documentation) |doc| {
             try self.writeKey("documentation");
-            try self.writeValue("|\n", .{});
+            try self.writeValue("|", .{});
 
             var cursor: usize = 0;
             while (cursor < doc.content.len) {
-                const end = cursor + (std.mem.indexOfScalar(u8, doc.content[cursor..], '\n') orelse break);
-                if ((end - cursor) > 0) {
-                    _ = try self.writer.writeSplat(&.{" "}, (self.state.currentDepth() + 1) * 2);
-                    try self.writer.writeAll(doc.content[cursor .. end + 1]);
-                } else try self.writer.writeAll("\n\n");
+                const end = std.mem.indexOfScalarPos(u8, doc.content, cursor, '\n') orelse break;
+                try self.writer.writeByte('\n');
+                _ = try self.writer.writeSplat(&.{" "}, (self.state.currentDepth() + 1) * 2);
+                try self.writer.writeAll(doc.content[cursor .. end]);
                 cursor = end + 1;
             }
-            try self.writer.writeByte('\n');
         }
     }
 

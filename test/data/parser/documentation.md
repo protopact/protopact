@@ -1,7 +1,7 @@
-# pact documentation
+# documentation
 
-```pactum
-/// this is a documentation
+```pragma
+//! this is a documentation
 ```
 
 ```yaml
@@ -11,73 +11,93 @@ documentation: |
 
 # multi-line documentation
 
-```pactum
-/// this is a documentation
+```pragma
+//! this is a documentation
 // with comment in between
-/// more documentation
-/** a different style of documentation */
-/**
- * multiple-lines
- */
+//! more documentation
+/* a different style of documentation */
 ```
 
 ```yaml
 documentation: |
   this is a documentation
   more documentation
-  a different style of documentation 
-  * multiple-lines
 ```
 
-# message documentation
+# misplaced package documentation
 
-```pactum
-/// this is a documentation for the pact
-pact something
+```pragma
+struct A {}
+
+//! Whatever
+```
+
+```yaml
+2:0[13] unexpected package documentation
+```
+
+# struct documentation
+
+```pragma
+//! this is a documentation for the package
 
 // ignore the comments
-/// This is a documentation for the message!
-message SomeMessage {
+/// This is a documentation for the struct!
+struct SomeMessage {
 	/// This is a documentation for the field.
 	// there can be comments as well.
-  some_field: string = 1 #optional
+    some_field: string = 1 #optional
 }
 ```
 
 ```yaml
 documentation: |
-  this is a documentation for the pact
-messages:
+  this is a documentation for the package
+structs:
   - name: "SomeMessage"
     documentation: |
-      This is a documentation for the message!
-    fields:
+      This is a documentation for the struct!
+    members:
       - name: "some_field"
         documentation: |
           This is a documentation for the field.
         type: "string"
         tag: 1
-        nullable: false
-        options:
 ```
 
-# message group
+# struct group with prior documentation
 
-```pactum
-/// this is a documentation for the pact
-pact something
+```pragma
+// comments
 
-message (
-	// ignore the comments
-	/// This is a documentation for the message!
-  SomeMessage {
-		/// This is a documentation for the field.
-		// there can be comments as well.
-		some_field: string = 1 #optional
-	}
+/// Documentation!
+struct (
+    Something {}
+)
+```
 
-	/** Another documentation.
-	*/
+```yaml
+2:0[13] unused documentation, use plain comments instead
+```
+
+# struct group
+
+```pragma
+//! this is a documentation for the package
+
+struct (
+    // ignore the comments
+	/// This is a documentation for the struct!
+    SomeMessage {
+        /// This is a documentation for the field.
+        // there can be comments as well.
+        some_field: string = 1 #optional
+    }
+
+    /// Another documentation, many miles away.
+    /// it is multi-line
+    /// as well.
+
 	AnotherOne {
 	}
 )
@@ -85,33 +105,32 @@ message (
 
 ```yaml
 documentation: |
-  this is a documentation for the pact
-messages:
+  this is a documentation for the package
+structs:
   - name: "SomeMessage"
     documentation: |
-      This is a documentation for the message!
-    fields:
+      This is a documentation for the struct!
+    members:
       - name: "some_field"
         documentation: |
           This is a documentation for the field.
         type: "string"
         tag: 1
-        nullable: false
-        options:
   - name: "AnotherOne"
     documentation: |
-      Another documentation.
+      Another documentation, many miles away.
+      it is multi-line
+      as well.
 ```
 
-# interface documentation
+# protocol documentation
 
-```pactum
-/// this is a documentation for the pact
-pact something
+```pragma
+//! this is a documentation for the package
 
 // ignore the comments
-/// This is a documentation for the interface!
-interface SomeService {
+/// This is a documentation for the protocol!
+protocol SomeService {
 	/// This is a documentation for the func.
 	// there can be comments as well.
   SomeFunc();
@@ -120,29 +139,28 @@ interface SomeService {
 
 ```yaml
 documentation: |
-  this is a documentation for the pact
-interfaces:
+  this is a documentation for the package
+protocols:
   - name: "SomeService"
     documentation: |
-      This is a documentation for the interface!
+      This is a documentation for the protocol!
     funcs:
       - name: "SomeFunc"
         documentation: |
           This is a documentation for the func.
 ```
 
-# interface group
+# protocol group
 
-```pactum
-/// this is a documentation for the pact
-pact something
+```pragma
+//! this is a documentation for the package
 
-interface (
+protocol (
   // ignore the comments
-  /// This is a documentation for the interface!
+  /// This is a documentation for the protocol!
   SomeService {
-	  /// This is a documentation for the func.
-	  // there can be comments as well.
+    /// This is a documentation for the func.
+    // there can be comments as well.
     SomeFunc();
   }
 )
@@ -150,11 +168,11 @@ interface (
 
 ```yaml
 documentation: |
-  this is a documentation for the pact
-interfaces:
+  this is a documentation for the package
+protocols:
   - name: "SomeService"
     documentation: |
-      This is a documentation for the interface!
+      This is a documentation for the protocol!
     funcs:
       - name: "SomeFunc"
         documentation: |
@@ -163,17 +181,18 @@ interfaces:
 
 # enum documentation
 
-```pactum
-/// this is a documentation for the pact
-pact something
+```pragma
+//! this is a documentation for the package
 
 // ignore the comments
-/// This is a documentation for the interface!
+/// This is a documentation for the enum!
 enum Color {
 	// ignore comment.
 	/// We all know red.
 	Red,
-	/** Not sure about this one though.*/
+	/* TODO: write a better description for this. */
+    /// Well, you know, color of the trees, eh?
+    /// Or maybe, grass? definitely not mountains.
 	Green,
 	/// Documentation for blue.
 	// even though there are comments here, the documentation
@@ -184,18 +203,19 @@ enum Color {
 
 ```yaml
 documentation: |
-  this is a documentation for the pact
+  this is a documentation for the package
 enums:
   - name: "Color"
     documentation: |
-      This is a documentation for the interface!
+      This is a documentation for the enum!
     variants:
       - name: "Red"
         documentation: |
           We all know red.
       - name: "Green"
         documentation: |
-          Not sure about this one though.
+          Well, you know, color of the trees, eh?
+          Or maybe, grass? definitely not mountains.
       - name: "Blue"
         documentation: |
           Documentation for blue.
@@ -203,20 +223,19 @@ enums:
 
 # const documentation
 
-```pactum
-/// this is a documentation for the pact
-pact something
+```pragma
+//! this is a documentation for the package
 
 // ignore
 /// Name is pretty obvious!
 /* this is a comment and should NOT
  * be part of the documentation!
  */
-const Name = "Pactum"
+const Name = "#pragma once"
 
 const (
-	/// Another is in a group
-  Another = 1
+    /// Another is in a group
+    Another = 1
 
 	// ignore
 	/// Documentation
@@ -230,10 +249,12 @@ const (
 
 ```yaml
 documentation: |
-  this is a documentation for the pact
+  this is a documentation for the package
 constants:
   - name: "Name"
-    value: "Pactum"
+    documentation: |
+      Name is pretty obvious!
+    value: "#pragma once"
   - name: "Another"
     documentation: |
       Another is in a group
@@ -246,7 +267,7 @@ constants:
     documentation: |
       Documentation for the last one
     value:
-      key: "tags"
-      value:
-        - 1.2
+      - key: "tags"
+        value:
+          - 1.2
 ```

@@ -1083,32 +1083,37 @@ const Context = struct {
 
         while (true) {
             const next = try self.peekNextOrError();
-            if (next.kind == .RightParan) {
-                self.popScopeDelimiter(.Paran);
-                self.consume();
-                break;
-            } else {
-                handler(self) catch |err| switch (err) {
-                    Error.UnexpectedToken => {
-                        switch (self.scopeDelimiterContext()) {
-                            // outside of the paran scope; stop iterating.
-                            0 => break,
-                            // in the paran scope; skip the current line.
-                            1 => {
-                                self.it.goBack();
-                                if (try self.skipTokensUntilScope(recovery_tokens, 1)) {
+            switch (next.kind) {
+                .RightParan => {
+                    self.popScopeDelimiter(.Paran);
+                    self.consume();
+                    break;
+                },
+                .Documentation => try self.stageDocumentationGroup(),
+                else => {
+                    handler(self) catch |err| switch (err) {
+                        Error.UnexpectedToken => {
+                            switch (self.scopeDelimiterContext()) {
+                                // outside of the paran scope; stop iterating.
+                                0 => break,
+                                // in the paran scope; skip the current line.
+                                1 => {
+                                    self.it.goBack();
+                                    if (try self.skipTokensUntilScope(recovery_tokens, 1)) {
+                                        break;
+                                    }
+                                },
+                                // unlikely event, get out of the paran scope.
+                                else => {
+                                    try self.skipTokensUntilRootScope();
                                     break;
-                                }
-                            },
-                            // unlikely event, get out of the paran scope.
-                            else => {
-                                try self.skipTokensUntilRootScope();
-                                break;
-                            },
-                        }
-                    },
-                    else => return err,
-                };
+                                },
+                            }
+                        },
+                        else => return err,
+                    };
+
+                }
             }
         }
     }
@@ -1547,14 +1552,18 @@ const Context = struct {
     /// read contiguous package documentations and add them to the document.
     fn consumePackageDocumentation(self: *Context) Allocator.Error!void {
         while (self.it.peek(1)) |token| {
-            const is_documentation = switch (token.kind) { .Documentation => true, else => false };
-            if (!is_documentation or !token.kind.Documentation.flags.package) {
-                break;
+            switch (token.kind) {
+                .Documentation => |doc| {
+                    if (!doc.flags.package) {
+                        break;
+                    }
+                    self.consume();
+                    const content = doc.content;
+                    try self.staged_documentation.boundaries.append(content);
+                    self.staged_documentation.content_size += content.len;
+                },
+                else => break,
             }
-
-            const content = token.kind.Documentation.content;
-            try self.staged_documentation.boundaries.append(content);
-            self.staged_documentation.content_size += content.len;
         }
 
         self.documentation = try self.consumeStagedDocumentation();
@@ -1562,7 +1571,6 @@ const Context = struct {
 
     /// parse and stage documentation lines.
     fn stageDocumentationGroup(self: *Context) Allocator.Error!void {
-        // TODO: Do we need to clear the previous staged documentation?
         while (self.it.peek(1)) |token| {
             if (token.kind != .Documentation)
                 break;
@@ -1570,8 +1578,10 @@ const Context = struct {
             self.consume();
 
             if (token.kind.Documentation.flags.package) {
-                if (self.staged_documentation.encountered_package_error)
+                if (!self.staged_documentation.encountered_package_error) {
                     self.addError(.unexpectedDocumentationPackage(token.range.start));
+                    self.staged_documentation.encountered_package_error = true;
+                }
                 
                 continue;
             }
@@ -1586,15 +1596,16 @@ const Context = struct {
     }
 
     fn consumeStagedDocumentation(self: *Context) Allocator.Error!?ast.Documentation {
-        if (self.staged_documentation.empty())
+        if (self.staged_documentation.empty()) {
             return null;
-        const content_size = self.staged_documentation.content_size + self.staged_documentation.boundaries.len() - 1;
+        }
+        defer self.staged_documentation.reset();
+        const content_size = self.staged_documentation.content_size + self.staged_documentation.boundaries.len();
         var content_buffer = try std.ArrayList(u8).initCapacity(self.allocator, content_size);
         var it = self.staged_documentation.boundaries.iterator();
-        content_buffer.appendSliceAssumeCapacity(it.next() orelse unreachable);
         while (it.next()) |boundary| {
-            content_buffer.appendAssumeCapacity('\n');
             content_buffer.appendSliceAssumeCapacity(boundary);
+            content_buffer.appendAssumeCapacity('\n');
         }
         return ast.Documentation{ .content = content_buffer.items };
     }
