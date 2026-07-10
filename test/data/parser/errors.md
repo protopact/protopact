@@ -380,7 +380,7 @@ protocols:
 
 # const group EOF
 
-```pact
+```pragma
 const (
     A = "1"
     B = {
@@ -401,7 +401,7 @@ constants:
 
 # const EOF
 
-```pact
+```pragma
 const B = {
     "key": "value",
 ```
