@@ -54,11 +54,28 @@ pub const PragmaError = struct {
         range: ast.Range,
     };
 
+    pub const Code = enum {
+        NestingDepthReached,
+        UnexpectedToken,
+        UnexpectedEOF,
+        RedundantAnnotationHash,
+        ExtraAnnotationWithoutSigil,
+        UnusedDocumentation,
+        UnexpectedPackageDocumentation,
+        EnumVariantNumericalError,
+        FieldTagError,
+        FuncTagError,
+        UnsupportedPragmaKeyword,
+        SyntaxError,
+    };
+
+    code: Code,
     message: []const u8,
     location: ?Location,
 
     fn nestingDepthReached(position: usize) PragmaError {
         return .{
+            .code = .NestingDepthReached,
             .message = "maximum nesting level of 10 reached",
             .location = Location{ .position = position },
         };
@@ -70,6 +87,7 @@ pub const PragmaError = struct {
         }
 
         return .{
+            .code = .UnexpectedToken,
             .message = "unexpected token",
             .location = Location{ .range = token.range },
         };
@@ -77,6 +95,7 @@ pub const PragmaError = struct {
 
     fn redundantAnnotationHash(position: usize) PragmaError {
         return .{
+            .code = .RedundantAnnotationHash,
             .message = "redundant use of annotation symbol # in annotation block",
             .location = Location{ .position = position },
         };
@@ -84,6 +103,7 @@ pub const PragmaError = struct {
 
     fn extraAnnotationWithoutSigil(token: *const tokenizer.Token) PragmaError {
         return .{
+            .code = .ExtraAnnotationWithoutSigil,
             .message = "use of extra annotation (attribute) without extra modifier, did you mean to use x# ?",
             .location = Location{ .range = token.range },
         };
@@ -91,13 +111,15 @@ pub const PragmaError = struct {
 
     fn unusedDocumentation(position: usize) PragmaError {
         return .{
+            .code = .UnusedDocumentation,
             .message = "unused documentation, use plain comments instead",
             .location = Location{ .position = position },
         };
     }
 
-    fn unexpectedDocumentationPackage(position: usize) PragmaError {
+    fn unexpectedPackageDocumentation(position: usize) PragmaError {
         return .{
+            .code = .UnexpectedPackageDocumentation,
             .message = "unexpected package documentation",
             .location = .{ .position = position },
         };
@@ -105,6 +127,7 @@ pub const PragmaError = struct {
 
     fn unexpectedEOF() PragmaError {
         return .{
+            .code = .UnexpectedEOF,
             .message = "unexpected end of file",
             .location = Location{ .position = 0 },
         };
@@ -112,6 +135,7 @@ pub const PragmaError = struct {
 
     fn enumVariantNumericalError(token: *const tokenizer.Token) PragmaError {
         return .{
+            .code = .EnumVariantNumericalError,
             .message = "enum value must be a positive integer from 0 to 2^32-1",
             .location = Location{ .range = token.range },
         };
@@ -119,6 +143,7 @@ pub const PragmaError = struct {
 
     fn fieldTagNumericalError(token: *const tokenizer.Token) PragmaError {
         return .{
+            .code = .FieldTagError,
             .message = "field tag value must be a positive integer from 1 to 2^32-1",
             .location = Location{ .range = token.range },
         };
@@ -126,6 +151,7 @@ pub const PragmaError = struct {
 
     fn funcTagNumericalError(token: *const tokenizer.Token) PragmaError {
         return .{
+            .code = .FuncTagError,
             .message = "func tag value must be a positive integer from 1 to 2^32-1",
             .location = Location{ .range = token.range },
         };
@@ -133,6 +159,7 @@ pub const PragmaError = struct {
 
     fn unsupportedPragmaKeyword(token: *const tokenizer.Token) PragmaError {
         return .{
+            .code = .UnsupportedPragmaKeyword,
             .message = "Unexpected pragma function, did you mean to use @ref()?",
             .location = Location{ .range = token.range },
         };
@@ -144,6 +171,7 @@ pub const PragmaError = struct {
         }
 
         return .{
+            .code = .UnexpectedToken,
             .message = "expected " ++ expected,
             .location = Location{ .range = token.range },
         };
@@ -507,7 +535,7 @@ const Context = struct {
     }
 
     fn processStructBody(self: *Context) Error!void {
-        const recovery_points: []const TokenKindTag = &.{ .Documentation, .Identifier };
+        const recovery_points: []const TokenKindTag = &.{ .Documentation, .Identifier, .Comma, .OneOf };
         const documentation = try self.consumeStagedDocumentation();
         const name_token = try self.consumeRequiredToken(.Identifier, "struct name");
         _ = try self.consumeRequiredToken(.LeftCurlyBrace, "{");
@@ -552,7 +580,8 @@ const Context = struct {
                     const start = token.range.start;
                     self.consume();
                     const oneof_name_token = self.consumeRequiredToken(.Identifier, "oneof group name") catch |err|
-                        if (try self.recoverExitsScope(err, recovery_points, current_scope)) break else continue;
+                        if (try self.recoverExitsScope(err, recovery_points, current_scope))
+                            break else continue;
                     const S = struct {
                         fn addField(ctx: *@TypeOf(members), field: ast.Field) Error!void {
                             try ctx.append(.{ .field = field });
@@ -801,10 +830,10 @@ const Context = struct {
     /// Parse annotations belonging to an item (fields, functions, etc.).
     fn parseItemAnnotations(
         self: *Context,
-        comptime terminationToken: TokenKindTag,
+        comptime termination_token: TokenKindTag,
     ) Error!ParseResult(ast.AnnotationGroup) {
         const recovery_points: []const TokenKindTag = &.{
-            terminationToken, .Hash, .ExtraHash, .PrivateHash, .ExtraMode, .PrivateMode, .PrivateExtraMode
+            termination_token, .Hash, .ExtraHash, .PrivateHash, .ExtraMode, .PrivateMode, .PrivateExtraMode,
         };
         const current_scope = self.scopeDelimiterContext();
 
@@ -818,7 +847,7 @@ const Context = struct {
         const parent_might_need_recovery = blk: {
             while (true) {
                 const token = self.it.peek(1) orelse break :blk false;
-                if (token.kind == .RightCurlyBrace or token.kind == terminationToken) {
+                if (token.kind == .RightCurlyBrace or token.kind == termination_token) {
                     break :blk false;
                 }
                 if (self.parseAnnotation(false, null)) |v| {
@@ -1658,7 +1687,7 @@ const Context = struct {
 
             if (token.kind.Documentation.flags.package) {
                 if (!self.staged_documentation.encountered_package_error) {
-                    self.addError(.unexpectedDocumentationPackage(token.range.start));
+                    self.addError(.unexpectedPackageDocumentation(token.range.start));
                     self.staged_documentation.encountered_package_error = true;
                 }
                 
@@ -1690,6 +1719,10 @@ const Context = struct {
     }
 
     fn addError(self: *Context, err: PragmaError) void {
+        if (err.code == .UnexpectedEOF
+            and self.errors.len > 0 and self.errors.buffer[self.errors.len-1].code == .UnexpectedEOF) {
+            return;
+        }
         if (self.errors.len == self.errors.capacity()) {
             return;
         }
@@ -1701,6 +1734,7 @@ const Context = struct {
         const errors = try self.allocator.alloc(PragmaError, self.errors.len + self.it.errors.len);
         for (self.it.errors.slice(), 0..) |token_error, i| {
             errors[i] = PragmaError{
+                .code = .SyntaxError,
                 .message = token_error.message,
                 .location = .{ .range = token_error.range },
             };

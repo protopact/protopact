@@ -267,20 +267,19 @@ test "documentation" {
     });
 }
 
-// test "errors" {
-//     try runTests("./data/parser/errors.md", .{
-//         .marshaler = astcoder.YamlMarshaller{
-//             .excludeZeroValues = true,
-//             .includePact = true,
-//             .includeImport = true,
-//             .includeOptionAssignments = true,
-//             .includeConstants = true,
-//             .includeEnums = true,
-//             .includeMessages = true,
-//             .includeOptionDefinitions = true,
-//             .includeInterfaces = true,
-//             .includeDocumentation = true,
-//         },
-//         .writeDocumentOnError = true,
-//     });
-// }
+test "errors" {
+    try runTests("./data/parser/errors.md", .{
+        .coder_options = astcoder.Options{
+            .exclude_zero_values = true,
+            .include_annotation_definitions = true,
+            .include_annotations = true,
+            .include_import = true,
+            .include_protocols = true,
+            .include_documentation = true,
+            .include_structs = true,
+            .include_enums = true,
+            .include_constants = true,
+        },
+        .write_document_on_error = true,
+    });
+}
