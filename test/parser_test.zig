@@ -222,6 +222,7 @@ test "structs" {
             .include_structs = true,
             .include_range = true,
             .include_documentation = true,
+            .include_field_types = true,
             .exclude_zero_values = true,
         },
         .write_document_on_error = true,

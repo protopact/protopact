@@ -231,6 +231,8 @@ const Context = struct {
     protocols: std.ArrayList(ast.Protocol) = .empty,
     documentation: ?ast.Documentation = null,
 
+    field_types: StackFallbackArray(ast.Field.RangedType, 32),
+
     const AnnotationStartTokens = [_]TokenKindTag{
         .Hash,
         .ExtraHash,
@@ -287,6 +289,7 @@ const Context = struct {
             .transient_allocator = transient_allocator,
             .it = token_iterator,
             .staged_documentation = .init(transient_allocator),
+            .field_types = .init(transient_allocator),
         };
     }
 
@@ -721,16 +724,26 @@ const Context = struct {
                 const start = next_token.range.start;
                 self.consume();
                 _ = try self.consumeRequiredToken(.LessThan, "<");
-                const value: ast.Field.Type = blk: {
+                const value: ast.Field.TypePtr = blk: {
                     if (self.it.peek(1)) |inner_type_token| if (inner_type_token.kind == .Identifier) {
-                        const type_key_path = try self.parseKeyPath();
-                        break :blk ast.Field.Type{ .nullable = nullable, .kind = .{ .list = .{ .ref = type_key_path } } };
+                        break :blk .{ .ref = try self.parseKeyPath() };
                     };
-                    return Error.UnexpectedToken;
+                    const current_scope = self.scopeDelimiterContext();
+                    const inner_type = try self.parseFieldType();
+                    const id = self.field_types.len();
+                    try self.field_types.append(inner_type.data);
+                    const result = ast.Field.TypePtr{ .ptr = id };
+                    if (inner_type.needs_recovery) {
+                        return .init(ast.Field.RangedType{
+                            .value = .{ .nullable = nullable, .kind = .{ .list = result } },
+                            .range = ast.Range{ .start = start, .end = self.currentRangeAssumeSafe().end },
+                        }, current_scope != self.scopeDelimiterContext());
+                    }
+                    break :blk result;
                 };
                 const last_token = try self.consumeRequiredToken(.GreaterThan, ">");
                 return .init(ast.Field.RangedType{
-                    .value = value,
+                    .value = .{ .nullable = nullable, .kind = .{ .list = value } },
                     .range = ast.Range{ .start = start, .end = last_token.range.end },
                 }, false);
             },
@@ -740,14 +753,30 @@ const Context = struct {
                 _ = try self.consumeRequiredToken(.LessThan, "<");
                 const key_type = try self.parseKeyPath();
                 _ = try self.consumeRequiredToken(.Comma, ",");
-                const value_type = try self.parseKeyPath();
+                const value_type: ast.Field.TypePtr = blk: {
+                    if (self.it.peek(1)) |inner_type_token| if (inner_type_token.kind == .Identifier) {
+                        break :blk .{ .ref = try self.parseKeyPath() };
+                    };
+                    const id = self.field_types.len();
+                    const current_scope = self.scopeDelimiterContext();
+                    const result = try self.parseFieldType();
+                    try self.field_types.append(result.data);
+                    if (result.needs_recovery) {
+                        return .init(ast.Field.RangedType{
+                            .value = .{
+                                .nullable = nullable,
+                                .kind = .{ .map = .{ .key = key_type, .value = .{ .ptr = id } } },
+                            },
+                            .range = ast.Range{ .start = start, .end = self.currentRangeAssumeSafe().end },
+                        }, current_scope == self.scopeDelimiterContext());
+                    }
+                    break :blk .{ .ptr = id };
+                };
                 const last_token = try self.consumeRequiredToken(.GreaterThan, ">");
                 return .initOk(ast.Field.RangedType{
                     .value = .{
                         .nullable = nullable,
-                        .kind = .{
-                            .map = .{ .key = key_type, .value = .{ .ref = value_type } },
-                        },
+                        .kind = .{ .map = .{ .key = key_type, .value = value_type } },
                     },
                     .range = ast.Range{ .start = start, .end = last_token.range.end },
                 });
@@ -2103,6 +2132,7 @@ pub fn parse(allocator: Allocator, content: []const u8, opts: Options) ParseErro
             .annotation_definitions = ctx.annotation_definitions.items,
             .protocols = ctx.protocols.items,
             .documentation = ctx.documentation,
+            .field_types = try ctx.field_types.toOwnedSlice(ctx.allocator),
         },
     };
 }

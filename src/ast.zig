@@ -299,6 +299,9 @@ pub const Document = struct {
     /// captured documentation for the pragma package (should not conflict).
     documentation: ?Documentation,
 
+    /// field types registry, can be used to look up nested field types via ID (index).
+    field_types: []const Field.RangedType,
+
     pub const empty: Document = .{
         .imports = &.{},
         .annotations = &.{},

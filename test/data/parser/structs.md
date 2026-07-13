@@ -286,3 +286,55 @@ structs:
                   range: "7:28-73[218-263]"
                   data: "https://mycoolorg.org/docs/ref=user_name_v1"
 ```
+
+# struct with nested inlined types
+
+```pragma
+struct User {
+    name: string,
+    list_of_lists: ?list<?list<some_module.SomeType>>,
+    bad_map: ?map<string, ?list<oneof{ one: string, two: string}>>
+}
+```
+
+```yaml
+structs:
+  - name: "User"
+    range: "1:8-5:2[7-155]"
+    members:
+      - name: "name"
+        range: "2:5-17[18-30]"
+        type: "string"
+        type_range: "2:11-17[24-30]"
+      - name: "list_of_lists"
+        range: "3:5-54[36-85]"
+        nullable: true
+        type: "list[item=field_types:0]"
+        type_range: "3:21-54[52-85]"
+      - name: "bad_map"
+        range: "4:5-67[91-153]"
+        nullable: true
+        type: "map[key=string, value=field_types:1]"
+        type_range: "4:15-67[101-153]"
+field_types:
+  - id: 0
+    nullable: true
+    type: "list[item=some_module.SomeType]"
+    type_range: "3:27-53[58-84]"
+  - id: 1
+    type: oneof
+    oneof_fields:
+      - name: "one"
+        range: "4:40-51[126-137]"
+        type: "string"
+        type_range: "4:45-51[131-137]"
+      - name: "two"
+        range: "4:53-64[139-150]"
+        type: "string"
+        type_range: "4:58-64[144-150]"
+    type_range: "4:33-65[119-151]"
+  - id: 2
+    nullable: true
+    type: "list[item=field_types:1]"
+    type_range: "4:28-66[114-152]"
+```

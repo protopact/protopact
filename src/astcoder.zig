@@ -17,6 +17,7 @@ pub const Options = struct {
     include_annotation_definitions: bool = false,
     include_protocols: bool = false,
     include_documentation: bool = false,
+    include_field_types: bool = false,
 };
 
 const YamlState = struct {
@@ -506,7 +507,7 @@ const Context = struct {
         }
     }
 
-    fn writeDataType(self: *Context, data_type: ast.Field.RangedType) !void {
+    fn writeFieldType(self: *Context, data_type: ast.Field.RangedType) !void {
         if (!self.opts.exclude_zero_values or data_type.value.nullable) {
             try self.writeKey("nullable");
             try self.writeValue("{any}", .{data_type.value.nullable});
@@ -524,7 +525,7 @@ const Context = struct {
             .list => |key_path| {
                 switch (key_path) {
                     .ref => |ref| try self.writeQuotedValue("list[item={s}]", .{ref.content}),
-                    .ptr => {},
+                    .ptr => |ptr| try self.writeQuotedValue("list[item=field_types:{d}]", .{ptr}),
                 }
             },
             .map => |map_info| {
@@ -532,7 +533,9 @@ const Context = struct {
                     .ref => |ref| {
                         try self.writeQuotedValue("map[key={s}, value={s}]", .{ map_info.key.content, ref.content });
                     },
-                    .ptr => {},
+                    .ptr => |ptr| {
+                        try self.writeQuotedValue("map[key={s}, value=field_types:{d}]", .{ map_info.key.content, ptr });
+                    },
                 }
             },
             .oneof => |oneof_info| {
@@ -574,7 +577,7 @@ const Context = struct {
             try self.writeRange(field.range);
         }
 
-        try self.writeDataType(field.data_type);
+        try self.writeFieldType(field.data_type);
 
         if (field.tag) |tag| {
             try self.writeKey("tag");
@@ -841,6 +844,26 @@ const Context = struct {
             try self.writeProtocol(protocol);
         }
     }
+
+    fn writeFieldTypes(self: *Context, field_types: []const ast.Field.RangedType) !void {
+        if (!self.opts.include_field_types or (self.opts.exclude_zero_values and field_types.len == 0)) {
+            return;
+        }
+
+        try self.writeKey("field_types");
+        try self.startArray();
+        defer self.endArray();
+
+        for (field_types, 0..) |field_type, index| {
+            try self.startObject();
+            defer self.endObject();
+
+            try self.writeKey("id");
+            try self.writeValue("{d}", .{index});
+
+            try self.writeFieldType(field_type);
+        }
+    }
 };
 
 
@@ -860,6 +883,7 @@ pub const YamlMarshaller = struct {
         try ctx.writeStructs(doc.structs);
         try ctx.writeAnnotationDefinitions(doc.annotation_definitions);
         try ctx.writeProtocols(doc.protocols);
+        try ctx.writeFieldTypes(doc.field_types);
     }
 };
 
