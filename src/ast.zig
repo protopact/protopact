@@ -145,18 +145,14 @@ pub const Enum = struct {
     documentation: ?Documentation,
 };
 
-// old
-
 /// Field holds all the information for a field inside a model.
 pub const Field = struct {
     /// name of the field as it appears in the input file.
     name: Identifier,
     /// field data type.
-    data_type: RangedDataType,
+    data_type: RangedType,
     /// optional explicit field tag assignment. This is a numerical identifier for this field.
     tag: ?u16,
-    /// whether or not field can be null.
-    nullable: bool,
     /// annotations assigned to the field.
     annotations: AnnotationGroup,
     /// range is the boundary of the statement in the source code.
@@ -166,22 +162,37 @@ pub const Field = struct {
     /// the index of the one of group it belongs to, if any.
     oneof_group_index: ?u16,
 
-    pub const DataType = union(enum) {
-        string: KeyPath,
-        list: KeyPath,
-        map: MapTypeInfo,
-        oneof: OneOfTypeInfo,
+    pub const TypeId = usize;
+
+    pub const TypePtr = union(enum) {
+        ref: KeyPath,
+        ptr: TypeId,
     };
+
     pub const OneOfTypeInfo = struct {
         fields: []const Field,
         annotations: []const AnnotationNode,
     };
+
     pub const MapTypeInfo = struct {
         key: KeyPath,
-        value: KeyPath,
+        value: TypePtr,
     };
-    pub const RangedDataType = struct {
-        value: DataType,
+
+    pub const DataKind = union(enum) {
+        name: TypePtr,
+        list: TypePtr,
+        map: MapTypeInfo,
+        oneof: OneOfTypeInfo,
+    };
+
+    pub const Type = struct {
+        nullable: bool,
+        kind: DataKind,
+    };
+
+    pub const RangedType = struct {
+        value: Type,
         range: Range,
     };
 };

@@ -506,18 +506,34 @@ const Context = struct {
         }
     }
 
-    fn writeDataType(self: *Context, data_type: ast.Field.RangedDataType) !void {
+    fn writeDataType(self: *Context, data_type: ast.Field.RangedType) !void {
+        if (!self.opts.exclude_zero_values or data_type.value.nullable) {
+            try self.writeKey("nullable");
+            try self.writeValue("{any}", .{data_type.value.nullable});
+        }
+
         try self.writeKey("type");
 
-        switch (data_type.value) {
-            .string => |key_path| {
-                try self.writeQuotedValue("{s}", .{key_path.content});
+        switch (data_type.value.kind) {
+            .name => |key_path| {
+                switch (key_path) {
+                    .ref => |ref| try self.writeQuotedValue("{s}", .{ref.content}),
+                    .ptr => {},
+                }
             },
             .list => |key_path| {
-                try self.writeQuotedValue("list[item={s}]", .{key_path.content});
+                switch (key_path) {
+                    .ref => |ref| try self.writeQuotedValue("list[item={s}]", .{ref.content}),
+                    .ptr => {},
+                }
             },
             .map => |map_info| {
-                try self.writeQuotedValue("map[key={s}, value={s}]", .{ map_info.key.content, map_info.value.content });
+                switch (map_info.value) {
+                    .ref => |ref| {
+                        try self.writeQuotedValue("map[key={s}, value={s}]", .{ map_info.key.content, ref.content });
+                    },
+                    .ptr => {},
+                }
             },
             .oneof => |oneof_info| {
                 try self.writeValue("{s}", .{"oneof"});
@@ -566,11 +582,6 @@ const Context = struct {
         } else if (!self.opts.exclude_zero_values) {
             try self.writeKey("tag");
             try self.writeValue("{s}", .{LiteralNone});
-        }
-
-        if (!self.opts.exclude_zero_values or field.nullable) {
-            try self.writeKey("nullable");
-            try self.writeValue("{any}", .{field.nullable});
         }
 
         if (field.oneof_group_index) |index| {

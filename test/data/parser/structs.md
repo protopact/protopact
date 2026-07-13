@@ -204,10 +204,10 @@ structs:
         type_range: "2:9-15[25-31]"
       - name: "updateSomething"
         range: "3:5-49[37-81]"
+        nullable: true
         type: "string"
         type_range: "3:23-29[55-61]"
         tag: 1000
-        nullable: true
         annotations:
           - range: "3:38-49[70-81]"
             key_path:

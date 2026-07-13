@@ -635,9 +635,8 @@ const Context = struct {
         name_token: tokenizer.Token,
         documentation: ?ast.Documentation,
         annotations: ast.AnnotationGroup,
-        nullable: bool,
         tag: ?u16,
-        data_type: ast.Field.RangedDataType,
+        data_type: ast.Field.RangedType,
         oneof_group_index: ?u16,
     ) Allocator.Error!ast.Field {
         return ast.Field{
@@ -647,7 +646,6 @@ const Context = struct {
             },
             .documentation = documentation,
             .annotations = annotations,
-            .nullable = nullable,
             .range = ast.Range{
                 .start = name_token.range.start,
                 .end = self.currentRangeAssumeSafe().end,
@@ -663,13 +661,12 @@ const Context = struct {
         const doc = try self.consumeStagedDocumentation();
         const name_token = try self.consumeRequiredToken(.Identifier, "field name");
         _ = try self.consumeRequiredToken(.Colon, ":");
-        const nullable = self.consumeOptionalTokenBool(.QuestionMark);
         const current_scope = self.scopeDelimiterContext();
 
-        const data_type = try self.parseFieldDataType();
+        const data_type = try self.parseFieldType();
         if (data_type.needs_recovery) {
             return .init(
-                try self.buildField(name_token, doc, .empty, nullable, null, data_type.data, oneof_group_index),
+                try self.buildField(name_token, doc, .empty, null, data_type.data, oneof_group_index),
                 true,
             );
         }
@@ -683,27 +680,28 @@ const Context = struct {
                     tag = tag_value;
                 } else self.addError(PragmaError.fieldTagNumericalError(&tag_token));
             } else |err| return .init(
-                try self.buildField(name_token, doc, .empty, nullable, tag, data_type.data, oneof_group_index),
+                try self.buildField(name_token, doc, .empty, tag, data_type.data, oneof_group_index),
                 try self.recoverExitsScope(err, recovery_points, current_scope),
             );
         }
 
         return if (self.parseItemAnnotations(.Comma)) |v| .init(
-            try self.buildField(name_token, doc, v.data, nullable, tag, data_type.data, oneof_group_index),
+            try self.buildField(name_token, doc, v.data, tag, data_type.data, oneof_group_index),
             v.needs_recovery,
         ) else |err| .init(
-            try self.buildField(name_token, doc, .empty, nullable, tag, data_type.data, oneof_group_index),
+            try self.buildField(name_token, doc, .empty, tag, data_type.data, oneof_group_index),
             try self.recoverExitsScope(err, recovery_points, current_scope),
         );
     }
 
-    fn parseFieldDataType(self: *Context) Error!ParseResult(ast.Field.RangedDataType) {
+    fn parseFieldType(self: *Context) Error!ParseResult(ast.Field.RangedType) {
+        const nullable = self.consumeOptionalTokenBool(.QuestionMark);
         const next_token = try self.peekNextOrError();
         switch (next_token.kind) {
             .Identifier => {
                 const type_key_path = try self.parseKeyPath();
-                return .init(ast.Field.RangedDataType{
-                    .value = .{ .string = type_key_path },
+                return .init(ast.Field.RangedType{
+                    .value = .{ .nullable = nullable, .kind = .{ .name = .{ .ref = type_key_path } } },
                     .range = type_key_path.range,
                 }, false);
             },
@@ -711,8 +709,8 @@ const Context = struct {
                 const start = next_token.range.start;
                 self.consume();
                 const oneof_body = try self.parseOneOfBodyType();
-                return .init(ast.Field.RangedDataType{
-                    .value = .{ .oneof = oneof_body.data },
+                return .init(ast.Field.RangedType{
+                    .value = .{ .nullable = nullable, .kind = .{ .oneof = oneof_body.data } },
                     .range = ast.Range{
                         .start = start,
                         .end = self.currentRangeAssumeSafe().end,
@@ -723,10 +721,16 @@ const Context = struct {
                 const start = next_token.range.start;
                 self.consume();
                 _ = try self.consumeRequiredToken(.LessThan, "<");
-                const type_key_path = try self.parseKeyPath();
+                const value: ast.Field.Type = blk: {
+                    if (self.it.peek(1)) |inner_type_token| if (inner_type_token.kind == .Identifier) {
+                        const type_key_path = try self.parseKeyPath();
+                        break :blk ast.Field.Type{ .nullable = nullable, .kind = .{ .list = .{ .ref = type_key_path } } };
+                    };
+                    return Error.UnexpectedToken;
+                };
                 const last_token = try self.consumeRequiredToken(.GreaterThan, ">");
-                return .init(ast.Field.RangedDataType{
-                    .value = .{ .list = type_key_path },
+                return .init(ast.Field.RangedType{
+                    .value = value,
                     .range = ast.Range{ .start = start, .end = last_token.range.end },
                 }, false);
             },
@@ -738,8 +742,13 @@ const Context = struct {
                 _ = try self.consumeRequiredToken(.Comma, ",");
                 const value_type = try self.parseKeyPath();
                 const last_token = try self.consumeRequiredToken(.GreaterThan, ">");
-                return .initOk(ast.Field.RangedDataType{
-                    .value = .{ .map = .{ .key = key_type, .value = value_type } },
+                return .initOk(ast.Field.RangedType{
+                    .value = .{
+                        .nullable = nullable,
+                        .kind = .{
+                            .map = .{ .key = key_type, .value = .{ .ref = value_type } },
+                        },
+                    },
                     .range = ast.Range{ .start = start, .end = last_token.range.end },
                 });
             },
