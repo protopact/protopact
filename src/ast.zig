@@ -244,7 +244,7 @@ pub const AnnotationTargetSet = std.enums.EnumSet(AnnotationTarget);
 
 pub const AnnotationDefinition = struct {
     targets: AnnotationTargetSet,
-    fields: []const Field,
+    members: []const Struct.Member,
     range: Range,
 };
 

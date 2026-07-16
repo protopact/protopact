@@ -927,7 +927,7 @@ const Context = struct {
 
         const current_scope = self.scopeDelimiterContext();
 
-        var fields = StackFallbackArray(ast.Field, 40).init(self.transient_allocator);
+        var members = StackFallbackArray(ast.Struct.Member, 40).init(self.transient_allocator);
 
         while (true) {
             const next_token = self.peekNextOrError() catch break;
@@ -937,8 +937,16 @@ const Context = struct {
                     self.consume();
                     break;
                 },
+                .Embed => {
+                    self.consume();
+                    if (self.parseKeyPath()) |key_path| {
+                        try members.append(.{ .embed = key_path });
+                    } else |err| if (try self.recoverExitsScope(err, &.{.Comma}, current_scope)) {
+                        break;
+                    }
+                },
                 else => if (self.parseField(null)) |v| {
-                    try fields.append(v.data);
+                    try members.append(.{ .field = v.data });
                     if (v.needs_recovery) {
                         break;
                     }
@@ -950,7 +958,7 @@ const Context = struct {
 
         try self.annotation_definitions.append(self.allocator, ast.AnnotationDefinition{
             .targets = target_set,
-            .fields = try fields.toOwnedSlice(self.allocator),
+            .members = try members.toOwnedSlice(self.allocator),
             .range = .{
                 .start = start,
                 .end = self.currentRangeAssumeSafe().end,

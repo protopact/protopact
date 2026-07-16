@@ -11,7 +11,7 @@ annotation_definitions:
   - targets:
       - Package
     range: "1:1-3:2[0-49]"
-    fields:
+    members:
       - name: "export_files"
         range: "2:5-23[29-47]"
         type: "bool"
@@ -37,7 +37,7 @@ annotation_definitions:
       - Protocol
       - Func
     range: "1:1-7:2[0-158]"
-    fields:
+    members:
       - name: "export_files"
         range: "2:2-34[42-74]"
         type: "bool"
@@ -114,7 +114,7 @@ annotation_definitions:
   - targets:
       - Enum
     range: "1:1-2:35[0-56]"
-    fields:
+    members:
       - name: "export_files"
         range: "2:2-34[23-55]"
         type: "bool"
@@ -130,4 +130,29 @@ annotation_definitions:
               data: true
 
 0:0[0] unexpected end of file
+```
+
+# use embed
+
+```pragma
+annotation for Package {
+    export_files: bool,
+
+    embed CommonOptions
+}
+```
+
+```yaml
+annotation_definitions:
+  - targets:
+      - Package
+    range: "1:1-5:2[0-75]"
+    members:
+      - name: "export_files"
+        range: "2:5-23[29-47]"
+        type: "bool"
+        type_range: "2:19-23[43-47]"
+      - embed:
+          content: "CommonOptions"
+          range: "4:11-24[60-73]"
 ```

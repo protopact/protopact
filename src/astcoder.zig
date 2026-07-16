@@ -649,19 +649,23 @@ const Context = struct {
         }
 
         if (info.members.len > 0 or !self.opts.exclude_zero_values) {
-            try self.writeKey("members");
-            try self.startArray();
-            defer self.endArray();
-            for (info.members) |member| {
-                switch (member) {
-                    .field => |field| try self.writeField(field),
-                    .embed => |embed| {
-                        try self.startObject();
-                        defer self.endObject();
-                        try self.writeKey("embed");
-                        try self.writeKeyPath(embed);
-                    },
-                }
+            try self.writeMembers(info.members);
+        }
+    }
+
+    fn writeMembers(self: *Context, members: []const ast.Struct.Member) !void {
+        try self.writeKey("members");
+        try self.startArray();
+        defer self.endArray();
+        for (members) |member| {
+            switch (member) {
+                .field => |field| try self.writeField(field),
+                .embed => |embed| {
+                    try self.startObject();
+                    defer self.endObject();
+                    try self.writeKey("embed");
+                    try self.writeKeyPath(embed);
+                },
             }
         }
     }
@@ -757,14 +761,8 @@ const Context = struct {
             try self.writeRange(def.range);
         }
 
-        if (def.fields.len > 0 or !self.opts.exclude_zero_values) {
-            try self.writeKey("fields");
-            try self.startArray();
-            defer self.endArray();
-
-            for (def.fields) |field| {
-                try self.writeField(field);
-            }
+        if (def.members.len > 0 or !self.opts.exclude_zero_values) {
+            try self.writeMembers(def.members);
         }
     }
 
