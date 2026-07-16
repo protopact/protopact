@@ -355,9 +355,11 @@ const Context = struct {
             try self.startObject();
             defer self.endObject();
 
-            if (!self.opts.exclude_zero_values or import.alias.len > 0) {
+            if (!self.opts.exclude_zero_values or import.alias != null) {
                 try self.writeKey("alias");
-                try self.writeQuotedValue("{s}", .{import.alias});
+                if (import.alias) |alias| {
+                    try self.writeQuotedValue("{s}", .{alias.value});
+                }
             }
 
             if (!self.opts.exclude_zero_values or import.bare) {
@@ -365,7 +367,7 @@ const Context = struct {
                 try self.writeValue("{any}", .{import.bare});
             }
             try self.writeKey("path");
-            try self.writeQuotedValue("{s}", .{import.path});
+            try self.writeQuotedValue("{s}", .{import.path.value});
             if (self.opts.include_range) {
                 try self.writeKey("range");
                 try self.writeRange(import.range);
@@ -519,7 +521,7 @@ const Context = struct {
             .name => |key_path| {
                 switch (key_path) {
                     .ref => |ref| try self.writeQuotedValue("{s}", .{ref.content}),
-                    .ptr => {},
+                    .ptr => |ptr| try self.writeQuotedValue("field_types:{d}", .{ptr}),
                 }
             },
             .list => |key_path| {

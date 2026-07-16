@@ -96,9 +96,9 @@ pub const Import = struct {
     /// indicates whether or not the import statement is marked as bare (via # token).
     bare: bool,
     /// if non-empty, it is the alias used to access the contents of the package.
-    alias: []const u8,
+    alias: ?Identifier,
     /// path to the package.
-    path: []const u8,
+    path: Identifier,
     /// range of the import statement in the source file.
     range: Range,
 };

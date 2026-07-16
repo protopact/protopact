@@ -44,7 +44,7 @@ pub const Iterator = struct {
                 self.i += 1;
                 return Segment{
                     .content = self.content,
-                    .range = .{ .start = self.start, .end = self.content.len },
+                    .range = .{ .start = self.start, .end = self.start + self.content.len },
                 };
             }
             return null;

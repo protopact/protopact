@@ -347,14 +347,14 @@ const Context = struct {
     fn processImportBody(self: *Context) Error!void {
         var start: ?usize = null;
         const bare = self.consumeOptionalTokenBool(.Hash);
-        var alias: []const u8 = "";
+        var alias: ?ast.Identifier = null;
 
         if (bare) {
             start = self.currentRangeAssumeSafe().start;
         }
 
         if (self.consumeOptionalToken(.Identifier)) |alias_token| {
-            alias = try self.copyString(alias_token.literal);
+            alias = .{ .value = try self.copyString(alias_token.literal), .range = alias_token.range };
             start = start orelse alias_token.range.start;
         }
 
@@ -362,7 +362,10 @@ const Context = struct {
         try self.imports.append(self.allocator, .{
             .bare = bare,
             .alias = alias,
-            .path = try path_token.kind.String.toOwnedAndEscaped(self.allocator),
+            .path = .{
+                .value = try path_token.kind.String.toOwnedAndEscaped(self.allocator),
+                .range = path_token.range,
+            },
             .range = .{ .start = start orelse path_token.range.start, .end = path_token.range.end },
         });
     }
