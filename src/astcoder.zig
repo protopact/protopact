@@ -557,6 +557,7 @@ const Context = struct {
                     }
                 }
             },
+            .invalid => try self.writeValue("{s}", .{"invalid"}),
         }
 
         if (self.opts.include_range) {

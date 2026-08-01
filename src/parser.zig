@@ -268,7 +268,7 @@ const Context = struct {
         .Comma,
     } ++ AnnotationStartTokens);
 
-    const MessageBodyRecoveryPoints = &([_]TokenKindTag{
+    const StructBodyRecoveryPoints = &([_]TokenKindTag{
         .Identifier,
         .Embed,
         .Documentation,
@@ -281,6 +281,18 @@ const Context = struct {
         .Documentation,
         .Comma,
         .Semicolon,
+    } ++ AnnotationStartTokens);
+
+    /// Tokens that legitimately end a field's type position (as opposed to a bogus token
+    /// standing in for a type). These must not be consumed when a type is missing/invalid,
+    /// otherwise scope tracking or a following annotation/member gets corrupted.
+    const FieldTypeTerminators = &([_]TokenKindTag{
+        .Comma,
+        .RightCurlyBrace,
+        .RightBracket,
+        .RightParan,
+        .GreaterThan,
+        .EOF,
     } ++ AnnotationStartTokens);
 
     fn init(allocator: Allocator, transient_allocator: Allocator, token_iterator: tokenizer.Iterator) Context {
@@ -425,7 +437,6 @@ const Context = struct {
     }
 
     fn processEnumBody(self: *Context) Error!void {
-        const recovery_points: []const TokenKindTag = &.{ .Documentation, .Identifier };
         const documentation = try self.consumeStagedDocumentation();
         const name_token = try self.consumeRequiredToken(.Identifier, "enum name");
         _ = try self.consumeRequiredToken(.LeftCurlyBrace, "{");
@@ -440,19 +451,19 @@ const Context = struct {
                 .Hash, .ExtraHash, .PrivateHash, .ExtraMode, .PrivateMode, .PrivateExtraMode => {
                     if (self.parseAnnotation(false, null)) |v| {
                         try annotations.append(v.data);
-                        if (v.needs_recovery and try self.skipTokensUntilScope(recovery_points, current_scope)) {
+                        if (v.needs_recovery and try self.skipTokensUntilScope(EnumBodyRecoveryPoints, current_scope)) {
                             break;
                         }
-                    } else |err| if (try self.recoverExitsScope(err, recovery_points, current_scope)) {
+                    } else |err| if (try self.recoverExitsScope(err, EnumBodyRecoveryPoints, current_scope)) {
                         break;
                     }
                 },
                 .Identifier => if (self.parseEnumVariant()) |v| {
                     try variants.append(v.data);
-                    if (v.needs_recovery and try self.skipTokensUntilScope(recovery_points, current_scope)) {
+                    if (v.needs_recovery and try self.skipTokensUntilScope(EnumBodyRecoveryPoints, current_scope)) {
                         break;
                     }
-                } else |err| if (try self.recoverExitsScope(err, recovery_points, current_scope)) {
+                } else |err| if (try self.recoverExitsScope(err, EnumBodyRecoveryPoints, current_scope)) {
                     break;
                 },
                 .Documentation => try self.stageDocumentationGroup(),
@@ -464,7 +475,7 @@ const Context = struct {
                 .Comma => self.consume(),
                 else => {
                     self.addError(PragmaError.unexpectedToken(&token));
-                    if (try self.skipTokensUntilScope(recovery_points, current_scope)) {
+                    if (try self.skipTokensUntilScope(EnumBodyRecoveryPoints, current_scope)) {
                         break;
                     }
                 },
@@ -541,7 +552,6 @@ const Context = struct {
     }
 
     fn processStructBody(self: *Context) Error!void {
-        const recovery_points: []const TokenKindTag = &.{ .Documentation, .Identifier, .Comma, .OneOf };
         const documentation = try self.consumeStagedDocumentation();
         const name_token = try self.consumeRequiredToken(.Identifier, "struct name");
         _ = try self.consumeRequiredToken(.LeftCurlyBrace, "{");
@@ -559,16 +569,16 @@ const Context = struct {
                 .Hash, .ExtraHash, .PrivateHash, .PrivateMode, .ExtraMode, .PrivateExtraMode => {
                     if (self.parseAnnotation(false, null)) |v| {
                         try annotations.append(v.data);
-                        if (v.needs_recovery and try self.skipTokensUntilScope(recovery_points, current_scope)) {
+                        if (v.needs_recovery and try self.skipTokensUntilScope(StructBodyRecoveryPoints, current_scope)) {
                             break;
                         }
-                    } else |err| if (try self.recoverExitsScope(err, recovery_points, current_scope)) {
+                    } else |err| if (try self.recoverExitsScope(err, StructBodyRecoveryPoints, current_scope)) {
                         break;
                     }
                 },
                 .Identifier => if (self.parseField(null)) |v| {
                     try members.append(.{ .field = v.data });
-                    if (v.needs_recovery and try self.skipTokensUntilScope(recovery_points, current_scope)) {
+                    if (v.needs_recovery and try self.skipTokensUntilScope(StructBodyRecoveryPoints, current_scope)) {
                         break;
                     }
                 } else |err| if (try self.recoverExitsScope(err, &.{.Comma}, current_scope)) {
@@ -578,7 +588,7 @@ const Context = struct {
                     self.consume();
                     if (self.parseKeyPath()) |key_path| {
                         try members.append(.{ .embed = key_path });
-                    } else |err| if (try self.recoverExitsScope(err, recovery_points, current_scope)) {
+                    } else |err| if (try self.recoverExitsScope(err, StructBodyRecoveryPoints, current_scope)) {
                         break;
                     }
                 },
@@ -586,7 +596,7 @@ const Context = struct {
                     const start = token.range.start;
                     self.consume();
                     const oneof_name_token = self.consumeRequiredToken(.Identifier, "oneof group name") catch |err|
-                        if (try self.recoverExitsScope(err, recovery_points, current_scope))
+                        if (try self.recoverExitsScope(err, StructBodyRecoveryPoints, current_scope))
                             break else continue;
                     const S = struct {
                         fn addField(ctx: *@TypeOf(members), field: ast.Field) Error!void {
@@ -605,7 +615,7 @@ const Context = struct {
                                 .end = self.currentRangeAssumeSafe().end,
                             },
                         });
-                    } else |err| if (try self.recoverExitsScope(err, recovery_points, current_scope)) {
+                    } else |err| if (try self.recoverExitsScope(err, StructBodyRecoveryPoints, current_scope)) {
                         break;
                     }
                 },
@@ -616,7 +626,7 @@ const Context = struct {
                 },
                 else => {
                     self.addError(PragmaError.unexpectedToken(&token));
-                    if (try self.skipTokensUntilScope(recovery_points, current_scope)) {
+                    if (try self.skipTokensUntilScope(StructBodyRecoveryPoints, current_scope)) {
                         break;
                     }
                 },
@@ -786,8 +796,20 @@ const Context = struct {
             },
             else => {
                 self.addError(PragmaError.expectToken(&next_token, "field type"));
-                self.consume();
-                return Error.UnexpectedToken;
+                // NB: If the token belongs to whatever comes after the type (end of field,
+                // closing scope, or an annotation), leave it for the caller to handle so that
+                // scope tracking and the next member/annotation aren't corrupted. Otherwise,
+                // treat it as a single bogus placeholder token for the type and consume it.
+                const range: ast.Range = if (self.nextTokenIsOneOf(FieldTypeTerminators))
+                    .{ .start = next_token.range.start, .end = next_token.range.start }
+                else blk: {
+                    self.consume();
+                    break :blk next_token.range;
+                };
+                return .init(ast.Field.RangedType{
+                    .value = .{ .nullable = nullable, .kind = .invalid },
+                    .range = range,
+                }, true);
             },
         }
     }

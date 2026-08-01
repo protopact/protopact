@@ -698,9 +698,13 @@ struct Name {
 structs:
   - name: "Name"
     annotations:
+      - key_path: "optional"
+        value: true
       - key_path: "required"
         value: true
     members:
+      - name: "bad_type"
+        type: invalid
       - name: "age"
         type: "i32"
         annotations:
@@ -758,4 +762,50 @@ structs:
             value:
               - 1
               - 2
+```
+
+
+# missing field type at cursor before closing brace
+
+```pragma
+struct User {
+    name: string,
+    age: 
+}
+```
+
+```yaml
+structs:
+  - name: "User"
+    members:
+      - name: "name"
+        type: "string"
+      - name: "age"
+        type: invalid
+
+4:1-2[42-43] expected field type @literal=}
+```
+
+# missing field type between two valid fields
+
+```pragma
+struct User {
+    name: string,
+    bogus: ,
+    email: string,
+}
+```
+
+```yaml
+structs:
+  - name: "User"
+    members:
+      - name: "name"
+        type: "string"
+      - name: "bogus"
+        type: invalid
+      - name: "email"
+        type: "string"
+
+3:12-13[43-44] expected field type @literal=,
 ```

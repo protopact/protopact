@@ -184,6 +184,9 @@ pub const Field = struct {
         list: TypePtr,
         map: MapTypeInfo,
         oneof: OneOfTypeInfo,
+        /// the type is missing or unparsable; the enclosing RangedType.range marks
+        /// where a type was expected, so tooling (e.g. completion) can still locate it.
+        invalid,
     };
 
     pub const Type = struct {
