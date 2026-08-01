@@ -18,36 +18,36 @@ pub fn main(init: std.process.Init) !void {
     const data = try std.Io.Dir.cwd().readFileAlloc(init.io, fileName, allocator, std.Io.Limit.unlimited);
 
     const now = std.Io.Timestamp.now(init.io, std.Io.Clock.awake);
-    const parseResult = try parser.parse(allocator, data, .{ .transientAllocator = std.heap.smp_allocator });
+    const parseResult = try parser.parse(allocator, data, .{ .transient_allocator = std.heap.smp_allocator });
     const diff = std.Io.Timestamp.untilNow(now, init.io, std.Io.Clock.awake);
     if (quiet) {
         std.debug.print("\ntook {}ms\n", .{diff.toMilliseconds()});
         return;
     }
-    const marshaler = astcoder.YamlMarshaller{
-        .excludeZeroValues = true,
-        .includeConstants = true,
-        .expandSelectors = false,
-        .includeDocumentation = true,
-        .includeEnums = true,
-        .includeImport = true,
-        .includeInterfaces = true,
-        .includeMessages = true,
-        .includeOptionAssignments = true,
-        .includeOptionDefinitions = true,
-        .includePact = true,
-        .includeRange = false,
+    const options = astcoder.Options{
+        .expand_key_path = true,
+        .exclude_zero_values = true,
+        .include_range = true,
+        .include_import = true,
+        .include_annotations = true,
+        .include_constants = true,
+        .include_enums = true,
+        .include_structs = true,
+        .include_annotation_definitions = true,
+        .include_protocols = true,
+        .include_documentation = true,
+        .include_field_types = true,
     };
 
     var buffer: [2048]u8 = undefined;
     var stdOutFile = std.Io.File.stdout();
     var stdOutWriter = stdOutFile.writer(init.io, &buffer);
 
-    try marshaler.writeDocument(&stdOutWriter.interface, parseResult.document);
+    try astcoder.YamlMarshaller.writeDocument(&stdOutWriter.interface, parseResult.document, options);
     try stdOutWriter.interface.flush();
     for (parseResult.errors) |err| {
-        std.debug.print("\nLiteral: {?s}, Message: {s}, Location: {?any}\n", .{
-            err.literal,
+        std.debug.print("\nCode: {}, Message: {s}, Location: {?any}\n", .{
+            err.code,
             err.message,
             err.location,
         });
